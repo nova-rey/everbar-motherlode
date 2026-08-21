@@ -51,3 +51,7 @@ Added source-shard workers that share immutable/downloaded inputs and derived ar
 ## 2026-08-21 — Remote Everbar checkout override
 
 Fixed the deployment boundary so a detached build can select its pinned Everbar checkout through `EVERBAR_CHECKOUT`, rather than inheriting a workstation-only absolute path. Existing Lightning Brick 3 failures caused by the missing local path are classified as invalid execution receipts and must be regenerated; no corpus-policy behavior is changed.
+
+## 2026-08-21 — Brick 3 semantic-review handoff
+
+Added a development-thread brief separating the invalid remote-path receipts from genuine MAESTRO pedal-controller and ASAP sustain/zero-duration-note findings. The brief records sample evidence and decision options while preserving the rule that Motherlode must not alter Brick 3 policy or silently repair source semantics.
