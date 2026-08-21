@@ -1,5 +1,5 @@
 from __future__ import annotations
-import hashlib, json, os, shutil, sqlite3, subprocess, sys, tarfile, time, tomllib, urllib.request, zipfile
+import hashlib, json, os, shutil, sqlite3, subprocess, sys, tarfile, time, tomllib, urllib.parse, urllib.request, zipfile
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path, PurePosixPath
@@ -32,6 +32,17 @@ def action(root:Path,s:dict,reason:str):
     p=root/"progress"/"user-actions.json"; a=json.loads(p.read_text()) if p.exists() else []
     if not any(x["dataset_id"]==s["id"] for x in a): a.append({"dataset_id":s["id"],"action":reason,"official_source":s["url"]})
     writej(p,a); (root/"progress"/"user-actions.md").write_text("# User actions\n\n"+"\n".join(f"- `{x['dataset_id']}`: {x['action']} — {x['official_source']}" for x in a)+"\n")
+def hf_token() -> str|None:
+    """Read a local Hugging Face CLI credential without exposing it in receipts."""
+    for value in (os.environ.get("HF_TOKEN"),os.environ.get("HUGGINGFACE_HUB_TOKEN")):
+        if value: return value.strip()
+    home=Path.home(); hf_home=Path(os.environ.get("HF_HOME",home/".cache"/"huggingface"))
+    for path in (hf_home/"token",home/".cache"/"huggingface"/"token",home/".huggingface"/"token"):
+        try:
+            value=path.read_text().strip()
+            if value: return value
+        except OSError: pass
+    return None
 def download(root:Path,s:dict)->Path:
     dest=root/"raw"/s["id"]/(s["id"]+".download"); dest.parent.mkdir(parents=True,exist_ok=True); part=dest.with_suffix(".part")
     if dest.exists(): return dest
@@ -39,6 +50,9 @@ def download(root:Path,s:dict)->Path:
         try:
             headers={}; offset=part.stat().st_size if part.exists() else 0
             if offset: headers["Range"]=f"bytes={offset}-"
+            if urllib.parse.urlparse(s["url"]).hostname in {"huggingface.co","hf.co"}:
+                token=hf_token()
+                if token: headers["Authorization"]="Bearer "+token
             with urllib.request.urlopen(urllib.request.Request(s["url"],headers=headers),timeout=60) as r, part.open("ab" if offset and r.status==206 else "wb") as f:
                 while chunk:=r.read(1024*1024): f.write(chunk)
             part.replace(dest); return dest

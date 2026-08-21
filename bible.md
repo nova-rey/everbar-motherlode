@@ -35,3 +35,7 @@ Detached launch receipts can now receive the exact staged tooling revision throu
 ## 2026-08-21 — Concurrent acquisition prefetch
 
 Added an independent, bounded prefetch runner for all automated, training-eligible raw sources and their source-qualified metadata. It never mutates CPU-pipeline dataset state or exposes partial files as complete; downloads use existing resumable `.part` behavior and atomically promote only completed artifacts. This permits I/O acquisition to overlap with PDMX/Brick 3 processing.
+
+## 2026-08-21 — Authenticated Hugging Face acquisition
+
+Added a credential boundary for Hugging Face payload URLs: Motherlode reads a local CLI token only from established environment/cache locations, supplies it as an HTTP authorization header, and never records the token in repository files, logs, receipts, or reports. This lets an operator-approved headless `hf auth login` authorize gated downloads without broadening license lanes.
