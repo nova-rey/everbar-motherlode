@@ -14,6 +14,7 @@ def main(argv=None):
  init(a.root,cfg)
  if a.detach:
   log=a.root/"logs"/"build.log"; f=log.open("a"); child=subprocess.Popen([sys.executable,"-m","everbar_motherlode.cli","build","--root",str(a.root),"--config",str(a.config.resolve()),"--resume"],stdout=f,stderr=subprocess.STDOUT,start_new_session=True)
-  writej(a.root/"progress"/"launch.json",{"pid":child.pid,"repo_sha":os.popen("git rev-parse HEAD").read().strip(),"config_sha256":hashlib.sha256(a.config.read_bytes()).hexdigest(),"log_path":str(log),"progress_path":str(a.root/'progress/current.json'),"terminal_receipt_path":str(a.root/'progress/terminal.json')}); print(child.pid); return 0
+  repo_sha=os.environ.get("MOTHERLODE_REPO_SHA") or os.popen("git rev-parse HEAD").read().strip()
+  writej(a.root/"progress"/"launch.json",{"pid":child.pid,"repo_sha":repo_sha,"config_sha256":hashlib.sha256(a.config.read_bytes()).hexdigest(),"log_path":str(log),"progress_path":str(a.root/'progress/current.json'),"terminal_receipt_path":str(a.root/'progress/terminal.json')}); print(child.pid); return 0
  out=run(a.root,cfg); writej(a.root/"progress"/"terminal.json",out); print(__import__('json').dumps(out)); return 0
 if __name__=="__main__": raise SystemExit(main())

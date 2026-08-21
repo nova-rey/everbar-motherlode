@@ -27,3 +27,7 @@ The provided GuitarSet Zenodo annotation archive is recorded as a source-qualifi
 ## 2026-08-21 — Source-level attribution for accepted endpoints
 
 Added a durable attribution table for each user-supplied acquisition endpoint, including source URLs, canonical citations, and Motherlode’s precise conversion boundary. Build attribution remains inclusion-based: it names only datasets that the run actually completes, while the static record documents authorization and provenance without claiming ownership or broader rights.
+
+## 2026-08-21 — Remote launch identity receipt
+
+Detached launch receipts can now receive the exact staged tooling revision through `MOTHERLODE_REPO_SHA`. This preserves an honest build identity when a cloud worker runs a transferred, pinned tooling bundle rather than a checkout with remote Git credentials.
