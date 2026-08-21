@@ -1,7 +1,7 @@
 from __future__ import annotations
 import hashlib, json, os, shutil, sqlite3, subprocess, sys, tarfile, time, tomllib, urllib.request, zipfile
 from collections import Counter
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 STAGES = ["DISCOVERED","LICENSE_VERIFIED","DOWNLOAD_PENDING","DOWNLOADING","DOWNLOADED","HASH_VERIFIED","EXTRACTED","INDEXED","DERIVED","BRICK3_COMPLETE","FINGERPRINTED","DEDUPE_COMPLETE","OVERLAY_COMPLETE","PROFILE_COMPLETE","DONE"]
@@ -65,10 +65,26 @@ def extract(root:Path,s:dict,artifact:Path)->Path:
     else: shutil.copy2(artifact,out/artifact.name)
     marker.write_text(sha(artifact.read_bytes())+"\n"); return out
 def midi_files(folder:Path): return sorted(p for p in folder.rglob("*") if p.suffix.lower() in {".mid",".midi"})
+def _pdmx_allowed_midi_paths(root: Path, ds: dict) -> set[str]:
+    """Map the official no-license-conflict JSON manifest to PDMX MIDI paths."""
+    artifact=root/"raw"/ds["id"]/(ds["id"]+"-subset-paths.tar.gz")
+    if not artifact.exists():
+        temporary=download(root,dict(ds,id=ds["id"]+"-subset-download",url=ds["subset_url"]))
+        temporary.replace(artifact)
+    subset_dir=extract(root,{"id":ds["id"]+"-subset-paths"},artifact)
+    listing=next(subset_dir.rglob("no_license_conflict.txt"))
+    allowed=set()
+    for line in listing.read_text(encoding="utf-8").splitlines():
+        path=PurePosixPath(line.lstrip("./"))
+        if path.parts and path.parts[0] == "data": path=PurePosixPath("mid",*path.parts[1:])
+        allowed.add(path.with_suffix(".mid").as_posix())
+    return allowed
 def derive(root:Path,c,ds:dict,folder:Path,cfg:dict):
     import mido
     result={"pieces":0,"tracks":0,"candidates":0,"accepts":0,"rejects":0}
+    allowed=_pdmx_allowed_midi_paths(root,ds) if ds["id"] == "pdmx" else None
     for p in midi_files(folder):
+        if allowed is not None and p.relative_to(folder).as_posix() not in allowed: continue
         raw=p.read_bytes(); rawid=stable("artifact",ds["id"],sha(raw)); piece=stable("piece",ds["id"],rawid,p.relative_to(folder).as_posix()); result["pieces"]+=1
         try: mid=mido.MidiFile(p)
         except Exception: continue
