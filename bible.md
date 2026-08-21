@@ -39,3 +39,7 @@ Added an independent, bounded prefetch runner for all automated, training-eligib
 ## 2026-08-21 — Authenticated Hugging Face acquisition
 
 Added a credential boundary for Hugging Face payload URLs: Motherlode reads a local CLI token only from established environment/cache locations, supplies it as an HTTP authorization header, and never records the token in repository files, logs, receipts, or reports. This lets an operator-approved headless `hf auth login` authorize gated downloads without broadening license lanes.
+
+## 2026-08-21 — Live uncommitted-batch progress and ETA
+
+Added a detached monitor that derives live stream count from filesystem artifacts while a large transaction remains uncommitted. For PDMX it reads the official eligible-path manifest, publishes percent complete, a measured PDMX-only stream rate, and a bounded stage ETA. It deliberately does not fabricate an overall corpus ETA until downstream source inventories exist.

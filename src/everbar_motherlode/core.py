@@ -129,8 +129,25 @@ def derive(root:Path,c,ds:dict,folder:Path,cfg:dict):
     return result
 def progress(root:Path,cfg:dict,state="RUNNING",stage="DISCOVERY"):
     c=db(root); datasets=c.execute("select state,data from datasets").fetchall(); items=c.execute("select state,canonical_hash from items").fetchall(); c.close(); raw=sum(p.stat().st_size for p in (root/"raw").rglob("*") if p.is_file()); starts=(root/"state"/"started"); elapsed=max(1,time.time()-float(starts.read_text())) if starts.exists() else 1
-    accepted=sum(1 for _,h in items if h); output={"state":state,"current_stage":stage,"datasets_total":len(datasets),"datasets_complete":sum(x[0]=="DONE" for x in datasets),"datasets_started":sum(x[0] not in {"DISCOVERED","GATED_USER_ACTION_REQUIRED"} for x in datasets),"bytes_downloaded":raw,"source_pieces_indexed":len(items),"derived_streams":len(items),"brick3_accepts":accepted,"brick3_rejects":sum(1 for x,_ in items if x=="BRICK3_COMPLETE")-accepted,"canonical_duplicates":max(0,accepted-len({h for _,h in items if h})),"disk_free_bytes":shutil.disk_usage(root).free,"throughput":{"bytes_per_second":raw/elapsed,"streams_per_second":len(items)/elapsed},"eta":{"status":"ESTIMATING" if len(items)>=2 else "INSUFFICIENT_DATA","best_seconds":None,"likely_seconds":None,"worst_seconds":None}}
+    live={d.name:sum(1 for p in d.glob("*.mid")) for d in (root/"derived").iterdir() if d.is_dir()}
+    pdmx_total=0; manifest=root/"extracted"/"pdmx-subset-paths"/"subset_paths"/"no_license_conflict.txt"
+    if manifest.exists(): pdmx_total=sum(1 for _ in manifest.open(encoding="utf-8"))
+    pdmx_done=live.get("pdmx",0); pdmx_rate=pdmx_done/elapsed if pdmx_done else 0.0
+    if pdmx_total and pdmx_done >= 100 and pdmx_rate:
+        remaining=max(0,pdmx_total-pdmx_done); likely=remaining/pdmx_rate
+        eta={"status":"ESTIMATING","scope":"pdmx_derivation_only","best_seconds":round(likely*.8),"likely_seconds":round(likely),"worst_seconds":round(likely*1.25)}
+    else: eta={"status":"INSUFFICIENT_DATA","scope":"overall","best_seconds":None,"likely_seconds":None,"worst_seconds":None}
+    accepted=sum(1 for _,h in items if h); output={"state":state,"current_stage":stage,"datasets_total":len(datasets),"datasets_complete":sum(x[0]=="DONE" for x in datasets),"datasets_started":sum(x[0] not in {"DISCOVERED","GATED_USER_ACTION_REQUIRED"} for x in datasets),"bytes_downloaded":raw,"source_pieces_indexed":len(items),"derived_streams":len(items),"live_derived_streams":sum(live.values()),"live_derived_by_dataset":live,"pdmx":{"eligible_source_paths":pdmx_total,"derived_streams":pdmx_done,"percent_complete":round(100*pdmx_done/pdmx_total,3) if pdmx_total else None},"brick3_accepts":accepted,"brick3_rejects":sum(1 for x,_ in items if x=="BRICK3_COMPLETE")-accepted,"canonical_duplicates":max(0,accepted-len({h for _,h in items if h})),"disk_free_bytes":shutil.disk_usage(root).free,"throughput":{"bytes_per_second":raw/elapsed,"pdmx_streams_per_second":round(pdmx_rate,4)},"eta":eta}
     writej(root/"progress"/"current.json",output); return output
+def monitor(root:Path,cfg:dict,interval:int=300,pid:int|None=None):
+    """Publish live filesystem-derived progress while a large batch is uncommitted."""
+    while True:
+        progress(root,cfg,"RUNNING","PDMX_DERIVATION")
+        if pid is not None:
+            try: os.kill(pid,0)
+            except ProcessLookupError: break
+        time.sleep(max(5,interval))
+    return progress(root,cfg,"PARTIAL","MONITOR_COMPLETE")
 def reconcile(root:Path,cfg:dict):
     """Backfill canonical identities from immutable Brick 3 receipts after upgrades."""
     c=db(root)

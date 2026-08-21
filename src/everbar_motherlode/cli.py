@@ -1,11 +1,12 @@
 from __future__ import annotations
 import argparse, hashlib, os, subprocess, sys
 from pathlib import Path
-from .core import config, init, prefetch, preflight, progress, run, writej
+from .core import config, init, monitor, prefetch, preflight, progress, run, writej
 def main(argv=None):
  p=argparse.ArgumentParser(); sub=p.add_subparsers(dest="cmd",required=True)
- for x in ("preflight","build","status","reconcile","prefetch"): q=sub.add_parser(x); q.add_argument("--root",type=Path,required=True); q.add_argument("--config",type=Path,default=Path("configs/motherlode-v1.toml")); q.add_argument("--resume",action="store_true"); q.add_argument("--detach",action="store_true")
+ for x in ("preflight","build","status","reconcile","prefetch","monitor"): q=sub.add_parser(x); q.add_argument("--root",type=Path,required=True); q.add_argument("--config",type=Path,default=Path("configs/motherlode-v1.toml")); q.add_argument("--resume",action="store_true"); q.add_argument("--detach",action="store_true")
  p_prefetch=sub.choices["prefetch"]; p_prefetch.add_argument("--workers",type=int,default=3)
+ p_monitor=sub.choices["monitor"]; p_monitor.add_argument("--interval",type=int,default=300); p_monitor.add_argument("--pid",type=int)
  a=p.parse_args(argv); cfg=config(a.config)
  if a.cmd=="preflight": print(__import__('json').dumps(preflight(a.root,cfg),indent=2)); return 0
  if a.cmd=="status": print(__import__('json').dumps(progress(a.root,cfg),indent=2)); return 0
@@ -17,6 +18,11 @@ def main(argv=None):
    log=a.root/"logs"/"prefetch.log"; f=log.open("a"); child=subprocess.Popen([sys.executable,"-m","everbar_motherlode.cli","prefetch","--root",str(a.root),"--config",str(a.config.resolve()),"--workers",str(a.workers)],stdout=f,stderr=subprocess.STDOUT,start_new_session=True)
    writej(a.root/"progress"/"prefetch-launch.json",{"pid":child.pid,"workers":a.workers,"log_path":str(log),"progress_path":str(a.root/'progress/prefetch.json')}); print(child.pid); return 0
   print(__import__('json').dumps(prefetch(a.root,cfg,a.workers),indent=2)); return 0
+ if a.cmd=="monitor":
+  if a.detach:
+   log=a.root/"logs"/"monitor.log"; f=log.open("a"); child=subprocess.Popen([sys.executable,"-m","everbar_motherlode.cli","monitor","--root",str(a.root),"--config",str(a.config.resolve()),"--interval",str(a.interval),*( ["--pid",str(a.pid)] if a.pid else [])],stdout=f,stderr=subprocess.STDOUT,start_new_session=True)
+   writej(a.root/"progress"/"monitor-launch.json",{"pid":child.pid,"watched_pid":a.pid,"interval_seconds":a.interval,"log_path":str(log),"progress_path":str(a.root/'progress/current.json')}); print(child.pid); return 0
+  print(__import__('json').dumps(monitor(a.root,cfg,a.interval,a.pid),indent=2)); return 0
  init(a.root,cfg)
  if a.detach:
   log=a.root/"logs"/"build.log"; f=log.open("a"); child=subprocess.Popen([sys.executable,"-m","everbar_motherlode.cli","build","--root",str(a.root),"--config",str(a.config.resolve()),"--resume"],stdout=f,stderr=subprocess.STDOUT,start_new_session=True)
