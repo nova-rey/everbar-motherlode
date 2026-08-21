@@ -1,0 +1,9 @@
+everbar_checkout = "/home/nyx/dreamstream-everbar"
+everbar_sha = "8876a0c0e4da91b32dd0542f543d97f2736e24c1"
+registry = "configs/sources/registry.json"
+min_free_bytes = 1073741824
+download_workers = 1
+parse_workers = 2
+brick3_workers = 1
+enabled_waves = ["A", "B", "C"]
+max_wave_a_bytes = 536870912
