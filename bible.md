@@ -43,3 +43,7 @@ Added a credential boundary for Hugging Face payload URLs: Motherlode reads a lo
 ## 2026-08-21 — Live uncommitted-batch progress and ETA
 
 Added a detached monitor that derives live stream count from filesystem artifacts while a large transaction remains uncommitted. For PDMX it reads the official eligible-path manifest, publishes percent complete, a measured PDMX-only stream rate, and a bounded stage ETA. It deliberately does not fabricate an overall corpus ETA until downstream source inventories exist.
+
+## 2026-08-21 — Isolated parallel source workers
+
+Added source-shard workers that share immutable/downloaded inputs and derived artifact paths, but use independent SQLite state databases so a long PDMX transaction cannot block other CPU cores. Completed shard receipts are merged deterministically into central state only after the central writer is idle, then marked DONE to avoid duplicate processing.

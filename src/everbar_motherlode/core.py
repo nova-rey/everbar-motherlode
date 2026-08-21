@@ -148,6 +148,35 @@ def monitor(root:Path,cfg:dict,interval:int=300,pid:int|None=None):
             except ProcessLookupError: break
         time.sleep(max(5,interval))
     return progress(root,cfg,"PARTIAL","MONITOR_COMPLETE")
+def shard(root:Path,cfg:dict,dataset_ids:list[str]):
+    """Run non-overlapping source datasets in parallel without central DB locks."""
+    sources={s["id"]:s for s in registry(cfg)}; results=[]
+    for dataset_id in dataset_ids:
+        ds=sources.get(dataset_id)
+        if not ds: raise ValueError(f"unknown dataset: {dataset_id}")
+        if ds["training"] != "ALLOWED" or ds["role"] != "raw": raise ValueError(f"not eligible for shard: {dataset_id}")
+        artifact=root/"raw"/dataset_id/(dataset_id+".download")
+        if not artifact.exists(): raise FileNotFoundError(f"download is not ready: {dataset_id}")
+        folder=extract(root,ds,artifact)
+        shard_root=root/"state"/"shards"/dataset_id; shard_root.mkdir(parents=True,exist_ok=True)
+        c=db(shard_root)
+        result=derive(root,c,ds,folder,cfg); c.commit(); c.close()
+        receipt={"state":"COMPLETE","dataset_id":dataset_id,"result":result,"shard_db":str(shard_root/"state"/"motherlode.sqlite"),"finished_at":time.time()}
+        writej(root/"progress"/"shards"/(dataset_id+".json"),receipt); results.append(receipt)
+    return {"state":"COMPLETE","results":results}
+def merge_shards(root:Path,cfg:dict):
+    """Merge completed isolated worker receipts after the central writer is idle."""
+    c=db(root); merged=[]
+    for receipt_path in sorted((root/"progress"/"shards").glob("*.json")) if (root/"progress"/"shards").exists() else []:
+        receipt=json.loads(receipt_path.read_text())
+        if receipt.get("state") != "COMPLETE": continue
+        dataset_id=receipt["dataset_id"]; shard_db=Path(receipt["shard_db"])
+        if not shard_db.exists(): continue
+        source=sqlite3.connect(shard_db)
+        rows=source.execute("select id,dataset_id,state,source_path,canonical_hash,raw_hash,detail from items").fetchall(); source.close()
+        c.executemany("insert or replace into items values(?,?,?,?,?,?,?)",rows)
+        c.execute("update datasets set state=?,updated=? where id=?",("DONE",time.time(),dataset_id)); merged.append({"dataset_id":dataset_id,"items":len(rows)})
+    c.commit(); c.close(); reports(root,cfg); return {"state":"COMPLETE","merged":merged,"progress":progress(root,cfg,"PARTIAL","SHARD_MERGED")}
 def reconcile(root:Path,cfg:dict):
     """Backfill canonical identities from immutable Brick 3 receipts after upgrades."""
     c=db(root)
