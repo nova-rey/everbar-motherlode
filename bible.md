@@ -23,3 +23,7 @@ Corrected GigaMIDI v2 to its official gated CC-BY-NC-4.0 record and Aria-MIDI to
 Recorded the user’s explicit acceptance of supplied official terms/download URLs for GigaMIDI, Aria-MIDI, ComMU, MAESTRO, ASAP, EMOPIA, and Groove MIDI. These sources are enabled only in the `RESEARCH_MAX` lane; their NC/SA conditions remain preserved in provenance and do not become permissive/commercial rights.
 
 The provided GuitarSet Zenodo annotation archive is recorded as a source-qualified provenance reference, not misrepresented as the original symbolic payload. Reconciliation now makes Aria eligible for retry when the current registry has authorized automated acquisition, and downloaded source metadata remains separate from payload identity.
+
+## 2026-08-21 — Source-level attribution for accepted endpoints
+
+Added a durable attribution table for each user-supplied acquisition endpoint, including source URLs, canonical citations, and Motherlode’s precise conversion boundary. Build attribution remains inclusion-based: it names only datasets that the run actually completes, while the static record documents authorization and provenance without claiming ownership or broader rights.
