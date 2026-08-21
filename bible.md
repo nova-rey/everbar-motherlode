@@ -13,3 +13,7 @@ Added safe tar extraction with traversal and link rejection, and replaced PDMX's
 ## 2026-08-21 — Enforce PDMX license-conflict subset
 
 PDMX derivation now downloads and intersects the official `no_license_conflict` manifest with archive MIDI paths before any V1 candidate is created. This makes the registry’s public-domain eligibility restriction executable rather than documentary.
+
+## 2026-08-21 — Correct next-wave license queue
+
+Corrected GigaMIDI v2 to its official gated CC-BY-NC-4.0 record and Aria-MIDI to its official gated CC-BY-NC-SA-4.0 record. Aria’s source-code repository is no longer misrepresented as a downloaded corpus. Existing false completion state is reconciled into an explicit user-action gate.

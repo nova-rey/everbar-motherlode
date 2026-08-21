@@ -25,6 +25,7 @@ def init(root:Path,cfg:dict):
     c=db(root)
     for s in registry(cfg):
         c.execute("insert or ignore into datasets values(?,?,?,?)",(s["id"],"DISCOVERED",json.dumps(s,sort_keys=True),time.time()))
+        c.execute("update datasets set data=? where id=?",(json.dumps(s,sort_keys=True),s["id"]))
     c.commit(); c.close(); writej(root/"progress"/"preflight.json",preflight(root,cfg))
 def action(root:Path,s:dict,reason:str):
     p=root/"progress"/"user-actions.json"; a=json.loads(p.read_text()) if p.exists() else []
@@ -124,6 +125,9 @@ def reconcile(root:Path,cfg:dict):
             canonical=(receipt.get("canonical") or {}).get("event_sha256")
             if canonical: c.execute("update items set canonical_hash=? where id=?",(canonical,ident))
         except (TypeError, json.JSONDecodeError): pass
+    # Older runs treated the Aria source-code repository as corpus payload.  V1
+    # now records the actual gated NC-SA dataset and cannot retain that false DONE.
+    c.execute("update datasets set state=?,updated=? where id=? and state='DONE'",("GATED_USER_ACTION_REQUIRED",time.time(),"aria-midi"))
     c.commit(); c.close(); reports(root,cfg); return progress(root,cfg,"PARTIAL","RECONCILED")
 def reports(root:Path,cfg:dict):
     c=db(root); rows=c.execute("select data,state from datasets").fetchall(); c.close(); src=[(json.loads(d),s) for d,s in rows]
