@@ -32,6 +32,7 @@ def action(root:Path,s:dict,reason:str):
     writej(p,a); (root/"progress"/"user-actions.md").write_text("# User actions\n\n"+"\n".join(f"- `{x['dataset_id']}`: {x['action']} — {x['official_source']}" for x in a)+"\n")
 def download(root:Path,s:dict)->Path:
     dest=root/"raw"/s["id"]/(s["id"]+".download"); dest.parent.mkdir(parents=True,exist_ok=True); part=dest.with_suffix(".part")
+    if dest.exists(): return dest
     for attempt in range(3):
         try:
             headers={}; offset=part.stat().st_size if part.exists() else 0
@@ -81,7 +82,7 @@ def derive(root:Path,c,ds:dict,folder:Path,cfg:dict):
             cmd=["uv","run","--directory",cfg["everbar_checkout"],"everbar-inspect-midi",str(out),"--root",str(out.parent),"--corpus-id",ds["id"]]
             run=subprocess.run(cmd,capture_output=True,text=True,timeout=120)
             if run.returncode==0 and run.stdout.strip():
-                receipt=json.loads(run.stdout.splitlines()[-1]); canonical=receipt.get("canonical_score_sha256") or receipt.get("canonical",{}).get("sha256")
+                receipt=json.loads(run.stdout.splitlines()[-1]); canonical=receipt.get("canonical_score_sha256") or ((receipt.get("canonical") or {}).get("sha256"))
                 c.execute("update items set state=?,canonical_hash=?,detail=? where id=?",("BRICK3_COMPLETE",canonical,json.dumps({"brick3":"ACCEPT","everbar_sha":cfg["everbar_sha"],"receipt":receipt}),cand)); result["accepts"]+=1
             else:
                 c.execute("update items set state=?,detail=? where id=?",("BRICK3_COMPLETE",json.dumps({"brick3":"REJECT","everbar_sha":cfg["everbar_sha"],"diagnostics":run.stderr[-2000:]}),cand)); result["rejects"]+=1
@@ -96,14 +97,16 @@ def reports(root:Path,cfg:dict):
 def run(root:Path,cfg:dict):
     init(root,cfg); (root/"state"/"started").write_text(str(time.time())); pf=preflight(root,cfg)
     if not pf["ok"]: return progress(root,cfg,"RESOURCE_PAUSED","RESOURCE_GUARD")
+    progress(root,cfg,"RUNNING","DISCOVERY")
     c=db(root)
+    resource_paused=False
     for s in registry(cfg):
         if s["role"] in {"superseded","documented","overlay","synthetic"}: continue
         if s["training"]!="ALLOWED" or s["method"]=="manual_gated": c.execute("update datasets set state=?,updated=? where id=?",("GATED_USER_ACTION_REQUIRED",time.time(),s["id"])); action(root,s,"license review or manual terms/credential action required"); continue
         # Never schedule an estimate that would breach the configured reserve.
         if s["estimate"] and s["estimate"] > shutil.disk_usage(root).free-int(cfg["min_free_bytes"]):
-            c.execute("update datasets set state=?,updated=? where id=?",("RESOURCE_PAUSED",time.time(),s["id"])); c.commit(); progress(root,cfg,"RESOURCE_PAUSED","RESOURCE_GUARD"); break
+            c.execute("update datasets set state=?,updated=? where id=?",("RESOURCE_PAUSED",time.time(),s["id"])); c.commit(); progress(root,cfg,"RESOURCE_PAUSED","RESOURCE_GUARD"); resource_paused=True; break
         try:
             c.execute("update datasets set state=?,updated=? where id=?",("DOWNLOADING",time.time(),s["id"])); c.commit(); art=download(root,s); c.execute("update datasets set state=?,updated=? where id=?",("HASH_VERIFIED",time.time(),s["id"])); folder=extract(root,s,art); derive(root,c,s,folder,cfg); c.execute("update datasets set state=?,updated=? where id=?",("DONE",time.time(),s["id"])); c.commit(); progress(root,cfg,"RUNNING","BRICK3")
         except Exception as e: c.execute("update datasets set state=?,updated=? where id=?",("FAILED",time.time(),s["id"])); action(root,s,"automatic acquisition failed: "+str(e)[:300]); c.commit()
-    c.close(); reports(root,cfg); return progress(root,cfg,"PARTIAL","REPORTING")
+    c.close(); reports(root,cfg); return progress(root,cfg,"RESOURCE_PAUSED" if resource_paused else "PARTIAL","RESOURCE_GUARD" if resource_paused else "REPORTING")
