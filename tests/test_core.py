@@ -1,7 +1,7 @@
-import json, zipfile
+import json, zipfile, sqlite3
 from pathlib import Path
 import pytest
-from everbar_motherlode.core import config, init, preflight, stable, extract, db, progress
+from everbar_motherlode.core import config, init, preflight, stable, extract, db, progress, reconcile
 
 def cfg(): return config(Path("configs/motherlode-v1.toml"))
 def test_ids_are_machine_and_path_independent():
@@ -20,3 +20,8 @@ def test_progress_and_disk_guard(tmp_path):
     assert not preflight(tmp_path,c)["ok"]
     init(tmp_path,cfg()); r=progress(tmp_path,cfg())
     assert r["eta"]["status"] == "INSUFFICIENT_DATA"
+def test_reconcile_uses_everbar_event_identity(tmp_path):
+    init(tmp_path,cfg()); c=db(tmp_path)
+    c.execute("insert into items values(?,?,?,?,?,?,?)",("v1_x","pop909","BRICK3_COMPLETE","x.mid",None,"raw",json.dumps({"receipt":{"canonical":{"event_sha256":"event-hash"}}})))
+    c.commit(); c.close(); reconcile(tmp_path,cfg())
+    c=db(tmp_path); assert c.execute("select canonical_hash from items where id='v1_x'").fetchone()[0] == "event-hash"; c.close()

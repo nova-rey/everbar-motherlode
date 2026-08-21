@@ -82,7 +82,7 @@ def derive(root:Path,c,ds:dict,folder:Path,cfg:dict):
             cmd=["uv","run","--directory",cfg["everbar_checkout"],"everbar-inspect-midi",str(out),"--root",str(out.parent),"--corpus-id",ds["id"]]
             run=subprocess.run(cmd,capture_output=True,text=True,timeout=120)
             if run.returncode==0 and run.stdout.strip():
-                receipt=json.loads(run.stdout.splitlines()[-1]); canonical=receipt.get("canonical_score_sha256") or ((receipt.get("canonical") or {}).get("sha256"))
+                receipt=json.loads(run.stdout.splitlines()[-1]); canonical=receipt.get("canonical_score_sha256") or ((receipt.get("canonical") or {}).get("event_sha256"))
                 c.execute("update items set state=?,canonical_hash=?,detail=? where id=?",("BRICK3_COMPLETE",canonical,json.dumps({"brick3":"ACCEPT","everbar_sha":cfg["everbar_sha"],"receipt":receipt}),cand)); result["accepts"]+=1
             else:
                 c.execute("update items set state=?,detail=? where id=?",("BRICK3_COMPLETE",json.dumps({"brick3":"REJECT","everbar_sha":cfg["everbar_sha"],"diagnostics":run.stderr[-2000:]}),cand)); result["rejects"]+=1
@@ -91,6 +91,16 @@ def progress(root:Path,cfg:dict,state="RUNNING",stage="DISCOVERY"):
     c=db(root); datasets=c.execute("select state,data from datasets").fetchall(); items=c.execute("select state,canonical_hash from items").fetchall(); c.close(); raw=sum(p.stat().st_size for p in (root/"raw").rglob("*") if p.is_file()); starts=(root/"state"/"started"); elapsed=max(1,time.time()-float(starts.read_text())) if starts.exists() else 1
     accepted=sum(1 for _,h in items if h); output={"state":state,"current_stage":stage,"datasets_total":len(datasets),"datasets_complete":sum(x[0]=="DONE" for x in datasets),"datasets_started":sum(x[0] not in {"DISCOVERED","GATED_USER_ACTION_REQUIRED"} for x in datasets),"bytes_downloaded":raw,"source_pieces_indexed":len(items),"derived_streams":len(items),"brick3_accepts":accepted,"brick3_rejects":sum(1 for x,_ in items if x=="BRICK3_COMPLETE")-accepted,"canonical_duplicates":max(0,accepted-len({h for _,h in items if h})),"disk_free_bytes":shutil.disk_usage(root).free,"throughput":{"bytes_per_second":raw/elapsed,"streams_per_second":len(items)/elapsed},"eta":{"status":"ESTIMATING" if len(items)>=2 else "INSUFFICIENT_DATA","best_seconds":None,"likely_seconds":None,"worst_seconds":None}}
     writej(root/"progress"/"current.json",output); return output
+def reconcile(root:Path,cfg:dict):
+    """Backfill canonical identities from immutable Brick 3 receipts after upgrades."""
+    c=db(root)
+    for ident, detail in c.execute("select id,detail from items where canonical_hash is null").fetchall():
+        try:
+            receipt=json.loads(detail).get("receipt") or {}
+            canonical=(receipt.get("canonical") or {}).get("event_sha256")
+            if canonical: c.execute("update items set canonical_hash=? where id=?",(canonical,ident))
+        except (TypeError, json.JSONDecodeError): pass
+    c.commit(); c.close(); reports(root,cfg); return progress(root,cfg,"PARTIAL","RECONCILED")
 def reports(root:Path,cfg:dict):
     c=db(root); rows=c.execute("select data,state from datasets").fetchall(); c.close(); src=[(json.loads(d),s) for d,s in rows]
     for name,body in {"licenses.md":"# Licenses\n\n"+"\n".join(f"- **{x['name']}**: {x['license']} / training {x['training']}" for x,_ in src),"acquisition.md":"# Acquisition\n\n"+"\n".join(f"- `{x['id']}`: {s}" for x,s in src),"attribution.md":"# Build attribution\n\n"+"\n".join(f"- {x['name']}: {x['citation']}" for x,s in src if s=="DONE"),"dedupe.md":"# Dedupe\n\nTier 0 raw SHA-256; Tier 1 Brick-3 canonical identity; later tiers cluster rather than erase provenance.\n","brick3.md":"# Brick 3\n\nPinned upstream SHA: `"+cfg['everbar_sha']+"`.\n","profile.md":"# Profile evidence\n\nCaps 64, 96, 128, 160, 192, 256 are evidence only; no cap is frozen.\n","failures.md":"# Failures\n\nSee state database and user action queue.\n"}.items(): (root/"reports"/name).write_text(body)
@@ -99,8 +109,10 @@ def run(root:Path,cfg:dict):
     if not pf["ok"]: return progress(root,cfg,"RESOURCE_PAUSED","RESOURCE_GUARD")
     progress(root,cfg,"RUNNING","DISCOVERY")
     c=db(root)
+    states=dict(c.execute("select id,state from datasets").fetchall())
     resource_paused=False
     for s in registry(cfg):
+        if states.get(s["id"]) == "DONE": continue
         if s["role"] in {"superseded","documented","overlay","synthetic"}: continue
         if s["training"]!="ALLOWED" or s["method"]=="manual_gated": c.execute("update datasets set state=?,updated=? where id=?",("GATED_USER_ACTION_REQUIRED",time.time(),s["id"])); action(root,s,"license review or manual terms/credential action required"); continue
         # Never schedule an estimate that would breach the configured reserve.
