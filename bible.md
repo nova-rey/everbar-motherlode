@@ -17,3 +17,9 @@ PDMX derivation now downloads and intersects the official `no_license_conflict` 
 ## 2026-08-21 — Correct next-wave license queue
 
 Corrected GigaMIDI v2 to its official gated CC-BY-NC-4.0 record and Aria-MIDI to its official gated CC-BY-NC-SA-4.0 record. Aria’s source-code repository is no longer misrepresented as a downloaded corpus. Existing false completion state is reconciled into an explicit user-action gate.
+
+## 2026-08-21 — User-accepted research acquisition wave
+
+Recorded the user’s explicit acceptance of supplied official terms/download URLs for GigaMIDI, Aria-MIDI, ComMU, MAESTRO, ASAP, EMOPIA, and Groove MIDI. These sources are enabled only in the `RESEARCH_MAX` lane; their NC/SA conditions remain preserved in provenance and do not become permissive/commercial rights.
+
+The provided GuitarSet Zenodo annotation archive is recorded as a source-qualified provenance reference, not misrepresented as the original symbolic payload. Reconciliation now makes Aria eligible for retry when the current registry has authorized automated acquisition, and downloaded source metadata remains separate from payload identity.

@@ -125,9 +125,13 @@ def reconcile(root:Path,cfg:dict):
             canonical=(receipt.get("canonical") or {}).get("event_sha256")
             if canonical: c.execute("update items set canonical_hash=? where id=?",(canonical,ident))
         except (TypeError, json.JSONDecodeError): pass
-    # Older runs treated the Aria source-code repository as corpus payload.  V1
-    # now records the actual gated NC-SA dataset and cannot retain that false DONE.
-    c.execute("update datasets set state=?,updated=? where id=? and state='DONE'",("GATED_USER_ACTION_REQUIRED",time.time(),"aria-midi"))
+    # Older runs treated the Aria source-code repository as corpus payload.  Do
+    # not retain that false completion; the current registry decides whether the
+    # official dataset is still gated or has user-authorized automated access.
+    aria=next((s for s in registry(cfg) if s["id"] == "aria-midi"),None)
+    if aria:
+        state="DISCOVERED" if aria["training"] == "ALLOWED" and aria["method"] != "manual_gated" else "GATED_USER_ACTION_REQUIRED"
+        c.execute("update datasets set state=?,updated=? where id=? and state='DONE'",(state,time.time(),"aria-midi"))
     c.commit(); c.close(); reports(root,cfg); return progress(root,cfg,"PARTIAL","RECONCILED")
 def reports(root:Path,cfg:dict):
     c=db(root); rows=c.execute("select data,state from datasets").fetchall(); c.close(); src=[(json.loads(d),s) for d,s in rows]
@@ -147,6 +151,11 @@ def run(root:Path,cfg:dict):
         if s["estimate"] and s["estimate"] > shutil.disk_usage(root).free-int(cfg["min_free_bytes"]):
             c.execute("update datasets set state=?,updated=? where id=?",("RESOURCE_PAUSED",time.time(),s["id"])); c.commit(); progress(root,cfg,"RESOURCE_PAUSED","RESOURCE_GUARD"); resource_paused=True; break
         try:
-            c.execute("update datasets set state=?,updated=? where id=?",("DOWNLOADING",time.time(),s["id"])); c.commit(); art=download(root,s); c.execute("update datasets set state=?,updated=? where id=?",("HASH_VERIFIED",time.time(),s["id"])); folder=extract(root,s,art); derive(root,c,s,folder,cfg); c.execute("update datasets set state=?,updated=? where id=?",("DONE",time.time(),s["id"])); c.commit(); progress(root,cfg,"RUNNING","BRICK3")
+            c.execute("update datasets set state=?,updated=? where id=?",("DOWNLOADING",time.time(),s["id"])); c.commit(); art=download(root,s)
+            # Sidecar metadata is source-qualified and retained separately from
+            # the payload; it never changes the source artifact's identity.
+            if s.get("metadata_url"):
+                download(root,{**s,"id":s["id"]+"-metadata","url":s["metadata_url"]})
+            c.execute("update datasets set state=?,updated=? where id=?",("HASH_VERIFIED",time.time(),s["id"])); folder=extract(root,s,art); derive(root,c,s,folder,cfg); c.execute("update datasets set state=?,updated=? where id=?",("DONE",time.time(),s["id"])); c.commit(); progress(root,cfg,"RUNNING","BRICK3")
         except Exception as e: c.execute("update datasets set state=?,updated=? where id=?",("FAILED",time.time(),s["id"])); action(root,s,"automatic acquisition failed: "+str(e)[:300]); c.commit()
     c.close(); reports(root,cfg); return progress(root,cfg,"RESOURCE_PAUSED" if resource_paused else "PARTIAL","RESOURCE_GUARD" if resource_paused else "REPORTING")
