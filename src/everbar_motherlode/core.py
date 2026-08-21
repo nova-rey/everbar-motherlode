@@ -11,7 +11,12 @@ def sha(b: bytes|str) -> str: return hashlib.sha256(b if isinstance(b,bytes) els
 def stable(kind: str, *parts: object) -> str: return f"{kind}_{sha(json.dumps(parts,sort_keys=True,separators=(',',':')))[:24]}"
 def writej(path: Path, data: Any):
     path.parent.mkdir(parents=True,exist_ok=True); tmp=path.with_suffix(path.suffix+".tmp"); tmp.write_text(json.dumps(data,indent=2,sort_keys=True)+"\n"); tmp.replace(path)
-def config(path: Path) -> dict: return tomllib.loads(path.read_text())
+def config(path: Path) -> dict:
+    value=tomllib.loads(path.read_text())
+    # Deployments may pin the same upstream SHA at a different absolute path;
+    # the environment override is recorded by the detached launch boundary.
+    if os.environ.get("EVERBAR_CHECKOUT"): value["everbar_checkout"]=os.environ["EVERBAR_CHECKOUT"]
+    return value
 def db(root: Path):
     p=root/"state"/"motherlode.sqlite"; p.parent.mkdir(parents=True,exist_ok=True); c=sqlite3.connect(p); c.execute("pragma journal_mode=WAL"); c.execute("create table if not exists datasets(id text primary key, state text, data text, updated real)"); c.execute("create table if not exists items(id text primary key,dataset_id text,state text,source_path text,canonical_hash text,raw_hash text,detail text)"); c.commit(); return c
 def preflight(root:Path,cfg:dict)->dict:
@@ -157,6 +162,7 @@ def shard(root:Path,cfg:dict,dataset_ids:list[str]):
         if ds["training"] != "ALLOWED" or ds["role"] != "raw": raise ValueError(f"not eligible for shard: {dataset_id}")
         artifact=root/"raw"/dataset_id/(dataset_id+".download")
         if not artifact.exists(): raise FileNotFoundError(f"download is not ready: {dataset_id}")
+        if dataset_id == "pdmx": (root/"state"/"started").write_text(str(time.time()))
         folder=extract(root,ds,artifact)
         shard_root=root/"state"/"shards"/dataset_id; shard_root.mkdir(parents=True,exist_ok=True)
         c=db(shard_root)

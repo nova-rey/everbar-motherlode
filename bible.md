@@ -47,3 +47,7 @@ Added a detached monitor that derives live stream count from filesystem artifact
 ## 2026-08-21 — Isolated parallel source workers
 
 Added source-shard workers that share immutable/downloaded inputs and derived artifact paths, but use independent SQLite state databases so a long PDMX transaction cannot block other CPU cores. Completed shard receipts are merged deterministically into central state only after the central writer is idle, then marked DONE to avoid duplicate processing.
+
+## 2026-08-21 — Remote Everbar checkout override
+
+Fixed the deployment boundary so a detached build can select its pinned Everbar checkout through `EVERBAR_CHECKOUT`, rather than inheriting a workstation-only absolute path. Existing Lightning Brick 3 failures caused by the missing local path are classified as invalid execution receipts and must be regenerated; no corpus-policy behavior is changed.
