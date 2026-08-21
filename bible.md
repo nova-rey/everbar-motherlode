@@ -31,3 +31,7 @@ Added a durable attribution table for each user-supplied acquisition endpoint, i
 ## 2026-08-21 — Remote launch identity receipt
 
 Detached launch receipts can now receive the exact staged tooling revision through `MOTHERLODE_REPO_SHA`. This preserves an honest build identity when a cloud worker runs a transferred, pinned tooling bundle rather than a checkout with remote Git credentials.
+
+## 2026-08-21 — Concurrent acquisition prefetch
+
+Added an independent, bounded prefetch runner for all automated, training-eligible raw sources and their source-qualified metadata. It never mutates CPU-pipeline dataset state or exposes partial files as complete; downloads use existing resumable `.part` behavior and atomically promote only completed artifacts. This permits I/O acquisition to overlap with PDMX/Brick 3 processing.

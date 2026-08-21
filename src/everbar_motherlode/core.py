@@ -1,6 +1,7 @@
 from __future__ import annotations
 import hashlib, json, os, shutil, sqlite3, subprocess, sys, tarfile, time, tomllib, urllib.request, zipfile
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -136,6 +137,41 @@ def reconcile(root:Path,cfg:dict):
 def reports(root:Path,cfg:dict):
     c=db(root); rows=c.execute("select data,state from datasets").fetchall(); c.close(); src=[(json.loads(d),s) for d,s in rows]
     for name,body in {"licenses.md":"# Licenses\n\n"+"\n".join(f"- **{x['name']}**: {x['license']} / training {x['training']}" for x,_ in src),"acquisition.md":"# Acquisition\n\n"+"\n".join(f"- `{x['id']}`: {s}" for x,s in src),"attribution.md":"# Build attribution\n\n"+"\n".join(f"- {x['name']}: {x['citation']}" for x,s in src if s=="DONE"),"dedupe.md":"# Dedupe\n\nTier 0 raw SHA-256; Tier 1 Brick-3 canonical identity; later tiers cluster rather than erase provenance.\n","brick3.md":"# Brick 3\n\nPinned upstream SHA: `"+cfg['everbar_sha']+"`.\n","profile.md":"# Profile evidence\n\nCaps 64, 96, 128, 160, 192, 256 are evidence only; no cap is frozen.\n","failures.md":"# Failures\n\nSee state database and user action queue.\n"}.items(): (root/"reports"/name).write_text(body)
+def prefetch(root:Path,cfg:dict,workers:int=3):
+    """Acquire approved source artifacts independently of CPU-bound derivation.
+
+    This intentionally has no dataset-state mutations: a processing runner sees
+    only atomically completed `.download` artifacts, while partial files remain
+    resumable and are owned solely by this prefetch process.
+    """
+    for name in ("raw","progress","logs","state"):
+        (root/name).mkdir(parents=True,exist_ok=True)
+    pf=preflight(root,cfg)
+    if not pf["ok"]:
+        receipt={"state":"RESOURCE_PAUSED","reason":"storage reserve","disk_free_bytes":pf["disk_free_bytes"]}
+        writej(root/"progress"/"prefetch.json",receipt); return receipt
+    sources=[s for s in registry(cfg) if s["training"] == "ALLOWED" and s["method"] != "manual_gated" and s["role"] == "raw" and s["id"] != "pdmx"]
+    started=time.time(); results=[]
+    def fetch(s:dict):
+        artifacts=[s]
+        if s.get("metadata_url"): artifacts.append({**s,"id":s["id"]+"-metadata","url":s["metadata_url"]})
+        paths=[]
+        for artifact in artifacts:
+            if shutil.disk_usage(root).free < int(cfg["min_free_bytes"]): raise RuntimeError("storage reserve reached")
+            paths.append(str(download(root,artifact)))
+        return {"dataset_id":s["id"],"state":"READY","artifacts":paths}
+    with ThreadPoolExecutor(max_workers=max(1,workers),thread_name_prefix="motherlode-download") as pool:
+        futures={pool.submit(fetch,s):s for s in sources}
+        for future in as_completed(futures):
+            s=futures[future]
+            try: results.append(future.result())
+            except Exception as exc:
+                results.append({"dataset_id":s["id"],"state":"FAILED","error":str(exc)[:500]})
+            writej(root/"progress"/"prefetch.json",{"state":"RUNNING","workers":workers,"started_at":started,"completed":len(results),"total":len(sources),"results":results,"disk_free_bytes":shutil.disk_usage(root).free})
+    failed=[x for x in results if x["state"] == "FAILED"]
+    receipt={"state":"PARTIAL" if failed else "SUCCESS","workers":workers,"started_at":started,"finished_at":time.time(),"completed":len(results),"total":len(sources),"results":results,"disk_free_bytes":shutil.disk_usage(root).free}
+    writej(root/"progress"/"prefetch.json",receipt)
+    return receipt
 def run(root:Path,cfg:dict):
     init(root,cfg); (root/"state"/"started").write_text(str(time.time())); pf=preflight(root,cfg)
     if not pf["ok"]: return progress(root,cfg,"RESOURCE_PAUSED","RESOURCE_GUARD")
