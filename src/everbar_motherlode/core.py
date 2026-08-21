@@ -1,5 +1,5 @@
 from __future__ import annotations
-import hashlib, json, os, shutil, sqlite3, subprocess, sys, time, tomllib, urllib.request, zipfile
+import hashlib, json, os, shutil, sqlite3, subprocess, sys, tarfile, time, tomllib, urllib.request, zipfile
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -54,6 +54,14 @@ def extract(root:Path,s:dict,artifact:Path)->Path:
                 target=(out/m.filename).resolve()
                 if not target.is_relative_to(out.resolve()): raise ValueError("unsafe archive member")
             z.extractall(out)
+    elif tarfile.is_tarfile(artifact):
+        with tarfile.open(artifact) as archive:
+            members = archive.getmembers()
+            for member in members:
+                target = (out/member.name).resolve()
+                if not target.is_relative_to(out.resolve()) or member.issym() or member.islnk():
+                    raise ValueError("unsafe archive member")
+            archive.extractall(out, members=members, filter="data")
     else: shutil.copy2(artifact,out/artifact.name)
     marker.write_text(sha(artifact.read_bytes())+"\n"); return out
 def midi_files(folder:Path): return sorted(p for p in folder.rglob("*") if p.suffix.lower() in {".mid",".midi"})

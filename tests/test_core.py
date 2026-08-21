@@ -1,4 +1,4 @@
-import json, zipfile, sqlite3
+import io, json, sqlite3, tarfile, zipfile
 from pathlib import Path
 import pytest
 from everbar_motherlode.core import config, init, preflight, stable, extract, db, progress, reconcile
@@ -15,6 +15,11 @@ def test_safe_extraction_rejects_traversal(tmp_path):
     z=tmp_path/"bad.zip"
     with zipfile.ZipFile(z,"w") as f: f.writestr("../escape.mid",b"no")
     with pytest.raises(ValueError): extract(tmp_path,{"id":"bad"},z)
+    tar=tmp_path/"bad.tar"
+    with tarfile.open(tar,"w") as archive:
+        info=tarfile.TarInfo("../escape.mid"); info.size=2
+        archive.addfile(info,io.BytesIO(b"no"))
+    with pytest.raises(ValueError): extract(tmp_path,{"id":"bad-tar"},tar)
 def test_progress_and_disk_guard(tmp_path):
     c=cfg(); c["min_free_bytes"]=10**30
     assert not preflight(tmp_path,c)["ok"]
