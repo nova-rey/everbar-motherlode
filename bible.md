@@ -141,3 +141,7 @@ Generalized the validated receipt guard for PDMX and GigaMIDI and added a four-s
 ## 2026-08-22 — Atomic Lightning wave deployment
 
 Added a deployment handoff that stops only scheduler parents, waits for their in-flight chunks to finish, retains the prior source tree as rollback evidence, then starts the validated four-slot workers and next-wave controller. This lets performance changes enter between chunks without killing, repeating, or silently changing completed corpus work.
+
+## 2026-08-22 — Core-aware fourth-slot handoff
+
+The fourth PDMX slot is represented by a durable waiting wrapper while the existing MAESTRO/Aria job owns the fourth CPU. It execs the deterministic worker only after that job exits, so the controller retains four-slot completion semantics without avoidable CPU oversubscription.

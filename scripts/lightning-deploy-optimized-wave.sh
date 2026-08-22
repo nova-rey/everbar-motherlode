@@ -31,10 +31,21 @@ for parent in "${parents[@]}" "$queue_parent"; do kill -TERM "$parent" 2>/dev/nu
 
 export MOTHERLODE_ROOT="$root" MOTHERLODE_REPO="$repo"
 export EVERBAR_CHECKOUT=${EVERBAR_CHECKOUT:?EVERBAR_CHECKOUT is required}
-for slot in 0 1 2 3; do
+for slot in 0 1 2; do
   nohup "$repo/scripts/motherlode-chunk-worker.sh" pdmx "$slot" > "$root/logs/pdmx-chunk-worker-${slot}.log" 2>&1 &
   echo $! > "$root/state/pdmx-chunk-worker-${slot}.pid"
 done
+# Keep the host at four useful Brick 3 processes while the pre-existing
+# MAESTRO/Aria worker is still alive. The slot-3 wrapper is itself the durable
+# PID the wave controller waits on, then execs the fourth PDMX worker.
+other_work_pid=${MOTHERLODE_CONCURRENT_WORK_PID:-}
+if test -n "$other_work_pid" && kill -0 "$other_work_pid" 2>/dev/null; then
+  nohup bash -c 'while kill -0 "$1" 2>/dev/null; do sleep 30; done; exec "$2" pdmx 3' bash \
+    "$other_work_pid" "$repo/scripts/motherlode-chunk-worker.sh" > "$root/logs/pdmx-chunk-worker-3.log" 2>&1 &
+else
+  nohup "$repo/scripts/motherlode-chunk-worker.sh" pdmx 3 > "$root/logs/pdmx-chunk-worker-3.log" 2>&1 &
+fi
+echo $! > "$root/state/pdmx-chunk-worker-3.pid"
 nohup "$repo/scripts/queue-gigamidi-after-pdmx.sh" > "$root/logs/queue-gigamidi-after-pdmx-chunks.log" 2>&1 &
 echo $! > "$root/state/queue-gigamidi-after-pdmx-chunks.pid"
 
