@@ -38,7 +38,8 @@ jobs:
         run: uv sync --frozen
       - name: Install and configure R2 client
         run: |
-          sudo apt-get update && sudo apt-get install --yes rclone
+          sudo apt-get update -o Dir::Etc::sourcelist="sources.list.d/ubuntu.sources" -o Dir::Etc::sourceparts="-"
+          sudo apt-get install --yes rclone
           test -n "$MOTHERLODE_RCLONE_CONFIG_B64"
           install -d -m 700 "$RUNNER_TEMP/rclone"
           printf '%s' "$MOTHERLODE_RCLONE_CONFIG_B64" | base64 --decode > "$RUNNER_TEMP/rclone/rclone.conf"

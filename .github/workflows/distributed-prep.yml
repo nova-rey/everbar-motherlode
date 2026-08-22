@@ -84,7 +84,12 @@ jobs:
         run: uv sync --frozen --extra test
 
       - name: Install rclone for protected storage access
-        run: sudo apt-get update && sudo apt-get install --yes rclone
+        run: |
+          # Isolate the Ubuntu package index from transient third-party runner
+          # repositories (for example Chrome's mirror) that are unrelated to
+          # the rclone dependency and can otherwise fail a healthy shard.
+          sudo apt-get update -o Dir::Etc::sourcelist="sources.list.d/ubuntu.sources" -o Dir::Etc::sourceparts="-"
+          sudo apt-get install --yes rclone
 
       - name: Configure private storage credentials
         run: |
@@ -158,7 +163,8 @@ jobs:
       - name: Install and configure rclone
         if: ${{ !startsWith(inputs.output_uri, 'file://') }}
         run: |
-          sudo apt-get update && sudo apt-get install --yes rclone
+          sudo apt-get update -o Dir::Etc::sourcelist="sources.list.d/ubuntu.sources" -o Dir::Etc::sourceparts="-"
+          sudo apt-get install --yes rclone
           test -n "$MOTHERLODE_RCLONE_CONFIG_B64"
           install -d -m 700 "$RUNNER_TEMP/rclone"
           printf '%s' "$MOTHERLODE_RCLONE_CONFIG_B64" | base64 --decode > "$RUNNER_TEMP/rclone/rclone.conf"

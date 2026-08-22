@@ -109,3 +109,7 @@ Added a protected manual staging workflow for each registry-approved raw source.
 ## 2026-08-22 — Approved-source Actions dispatch parity
 
 Expanded the distributed processing workflow selector to cover every current approved raw source, including ComMU, Groove MIDI, and EMOPIA. The selector remains a registry-aligned launch guard; it does not make unclear, gated, overlay, superseded, or synthetic sources training eligible.
+
+## 2026-08-22 — Runner package-index isolation
+
+Rclone installation now refreshes only the official Ubuntu package source on disposable Actions runners. A transient inconsistent third-party Chrome package index can no longer abort an otherwise healthy corpus shard before it contacts R2; failed shards remain safely retryable under their existing immutable run IDs.
