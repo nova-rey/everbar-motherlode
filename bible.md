@@ -105,3 +105,7 @@ Added additive canonical stream, note, bar, source-piece, and source-track table
 ## 2026-08-22 — Immutable Actions input staging
 
 Added a protected manual staging workflow for each registry-approved raw source. It acquires the official payload directly to a disposable runner, emits a source-qualified SHA-256 manifest, uploads private R2 data first, and publishes the staging completion marker last. Processing workers can therefore consume only verified staged inputs and retryable staging remains independent of CPU shard execution.
+
+## 2026-08-22 — Approved-source Actions dispatch parity
+
+Expanded the distributed processing workflow selector to cover every current approved raw source, including ComMU, Groove MIDI, and EMOPIA. The selector remains a registry-aligned launch guard; it does not make unclear, gated, overlay, superseded, or synthetic sources training eligible.
