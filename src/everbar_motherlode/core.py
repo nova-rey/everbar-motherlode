@@ -90,13 +90,14 @@ PERFORMANCE_FLATTENING_POLICY="performance-flattening-v1"
 def performance_flattening_v1(mid):
     """Render V1-supported pedal semantics without changing original MIDI bytes.
 
-    CC64 sustain and CC66 sostenuto delay note-offs; CC67 is explicitly
-    unrepresentable in V1 and removed. Verified zero-duration note pairs are
-    no-ops and are removed with an auditable count.
+    CC64 sustain and CC66 sostenuto delay note-offs; CC121 consumes a
+    channel-local controller reset; CC67 is explicitly unrepresentable in V1
+    and removed. Verified zero-duration note pairs are no-ops and are removed
+    with an auditable count.
     """
     import mido
     result=mido.MidiFile(type=mid.type,ticks_per_beat=mid.ticks_per_beat)
-    counts={"cc64_rendered":0,"cc66_rendered":0,"cc67_discarded":0,"zero_duration_notes_dropped":0,"end_of_track_noteoffs":0}
+    counts={"cc64_rendered":0,"cc66_rendered":0,"cc67_discarded":0,"cc121_resets_consumed":0,"zero_duration_notes_dropped":0,"end_of_track_noteoffs":0}
     for track in mid.tracks:
         absolute=0; sequence=0; events=[]; active={}; deferred=[]; sustain={}; sostenuto={}; eot=None; last_tick=0
         def emit(tick,msg):
@@ -111,8 +112,19 @@ def performance_flattening_v1(mid):
             absolute+=msg.time; last_tick=max(last_tick,absolute)
             if msg.type=="end_of_track": eot=(absolute,msg); continue
             channel=getattr(msg,"channel",None)
-            if msg.type=="control_change" and msg.control in {64,66,67}:
+            if msg.type=="control_change" and msg.control in {64,66,67,121}:
                 if msg.control==67: counts["cc67_discarded"]+=1; continue
+                if msg.control==121:
+                    # Reset All Controllers applies at this source tick. It
+                    # must release pedal-deferred notes before the CC is
+                    # removed; physically held keys remain active normally.
+                    sustain[channel]=False; sostenuto[channel]=False; counts["cc121_resets_consumed"]+=1
+                    for notes in active.values():
+                        for note in notes:
+                            if note["channel"]==channel: note["sostenuto"]=False
+                    for note in deferred:
+                        if note["channel"]==channel: note["sostenuto"]=False
+                    flush(channel,absolute); continue
                 down=msg.value>=64
                 if msg.control==64:
                     prior=sustain.get(channel,False); sustain[channel]=down; counts["cc64_rendered"]+=1
@@ -159,6 +171,30 @@ def convert_for_brick3(root:Path,ds:dict,candidate:Path,candidate_id:str):
     receipt["receipt_sha256"]=sha(json.dumps(receipt,sort_keys=True,separators=(",",":")))
     writej(root/"receipts"/"conversion"/(candidate_id+".json"),receipt)
     return output,receipt
+def sample_brick3(root:Path,cfg:dict,dataset_ids:list[str],limit:int=64):
+    """Deterministically audit bounded converted samples without touching shards."""
+    import mido
+    sources={s["id"]:s for s in registry(cfg)}; report={"policy_id":PERFORMANCE_FLATTENING_POLICY,"limit_per_dataset":limit,"datasets":{}}
+    for dataset_id in dataset_ids:
+        if dataset_id not in sources: raise ValueError(f"unknown dataset: {dataset_id}")
+        candidates=sorted((root/"derived"/dataset_id).glob("*.mid"))[:limit]
+        output_dir=root/"reports"/"brick3-samples"/PERFORMANCE_FLATTENING_POLICY/dataset_id; output_dir.mkdir(parents=True,exist_ok=True)
+        receipt_dir=root/"receipts"/"conversion-samples"/PERFORMANCE_FLATTENING_POLICY/dataset_id; receipt_dir.mkdir(parents=True,exist_ok=True)
+        accepted=0; code_streams=Counter(); execution_failures=[]
+        for candidate in candidates:
+            converted,counts=performance_flattening_v1(mido.MidiFile(candidate)); output=output_dir/candidate.name; converted.save(output)
+            conversion={"policy_id":PERFORMANCE_FLATTENING_POLICY,"sample":True,"source_candidate_id":candidate.stem,"source_midi_sha256":sha(candidate.read_bytes()),"output_midi_sha256":sha(output.read_bytes()),"source_path":str(candidate),"output_path":str(output),"counts":counts}
+            conversion["receipt_sha256"]=sha(json.dumps(conversion,sort_keys=True,separators=(",",":"))); writej(receipt_dir/(candidate.stem+".json"),conversion)
+            run=subprocess.run(["uv","run","--directory",cfg["everbar_checkout"],"everbar-inspect-midi",str(output),"--root",str(output_dir),"--corpus-id",dataset_id],capture_output=True,text=True,timeout=120)
+            if run.returncode or not run.stdout.strip():
+                execution_failures.append({"candidate_id":candidate.stem,"diagnostic":run.stderr[-500:]}); code_streams["EXECUTION_FAILURE"]+=1; continue
+            receipt=json.loads(run.stdout.splitlines()[-1]); decision=receipt.get("decision",{}); codes=set(decision.get("reason_codes",[]))
+            if decision.get("status")=="ACCEPT": accepted+=1
+            for code in codes: code_streams[code]+=1
+        size=len(candidates); rejected=size-accepted-len(execution_failures)
+        report["datasets"][dataset_id]={"sample_size":size,"accepted":accepted,"rejected":rejected,"execution_failures":len(execution_failures),"accept_rate":accepted/size if size else None,"reject_rate":rejected/size if size else None,"unsupported_meter_rejection_rate":code_streams["REJECT_UNSUPPORTED_METER"]/size if size else None,"semantic_control_rejection_rate":code_streams["REJECT_SEMANTIC_CONTROL_CHANGE"]/size if size else None,"rejection_class_stream_counts":dict(sorted(code_streams.items())),"execution_failure_samples":execution_failures}
+    writej(root/"reports"/"brick3-samples"/PERFORMANCE_FLATTENING_POLICY/"summary.json",report)
+    return report
 def _pdmx_allowed_midi_paths(root: Path, ds: dict) -> set[str]:
     """Map the official no-license-conflict JSON manifest to PDMX MIDI paths."""
     artifact=root/"raw"/ds["id"]/(ds["id"]+"-subset-paths.tar.gz")

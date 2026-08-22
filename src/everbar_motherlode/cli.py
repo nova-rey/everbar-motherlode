@@ -1,13 +1,14 @@
 from __future__ import annotations
 import argparse, hashlib, os, subprocess, sys
 from pathlib import Path
-from .core import config, init, merge_shards, monitor, prefetch, preflight, progress, run, shard, writej
+from .core import config, init, merge_shards, monitor, prefetch, preflight, progress, run, sample_brick3, shard, writej
 def main(argv=None):
  p=argparse.ArgumentParser(); sub=p.add_subparsers(dest="cmd",required=True)
- for x in ("preflight","build","status","reconcile","prefetch","monitor","shard","merge-shards"): q=sub.add_parser(x); q.add_argument("--root",type=Path,required=True); q.add_argument("--config",type=Path,default=Path("configs/motherlode-v1.toml")); q.add_argument("--resume",action="store_true"); q.add_argument("--detach",action="store_true")
+ for x in ("preflight","build","status","reconcile","prefetch","monitor","shard","merge-shards","sample-brick3"): q=sub.add_parser(x); q.add_argument("--root",type=Path,required=True); q.add_argument("--config",type=Path,default=Path("configs/motherlode-v1.toml")); q.add_argument("--resume",action="store_true"); q.add_argument("--detach",action="store_true")
  p_prefetch=sub.choices["prefetch"]; p_prefetch.add_argument("--workers",type=int,default=3)
  p_monitor=sub.choices["monitor"]; p_monitor.add_argument("--interval",type=int,default=300); p_monitor.add_argument("--pid",type=int)
  p_shard=sub.choices["shard"]; p_shard.add_argument("--dataset",action="append",required=True)
+ p_sample=sub.choices["sample-brick3"]; p_sample.add_argument("--dataset",action="append",required=True); p_sample.add_argument("--limit",type=int,default=64)
  a=p.parse_args(argv); cfg=config(a.config)
  if a.cmd=="preflight": print(__import__('json').dumps(preflight(a.root,cfg),indent=2)); return 0
  if a.cmd=="status": print(__import__('json').dumps(progress(a.root,cfg),indent=2)); return 0
@@ -31,6 +32,8 @@ def main(argv=None):
   print(__import__('json').dumps(shard(a.root,cfg,a.dataset),indent=2)); return 0
  if a.cmd=="merge-shards":
   print(__import__('json').dumps(merge_shards(a.root,cfg),indent=2)); return 0
+ if a.cmd=="sample-brick3":
+  print(__import__('json').dumps(sample_brick3(a.root,cfg,a.dataset,a.limit),indent=2)); return 0
  init(a.root,cfg)
  if a.detach:
   log=a.root/"logs"/"build.log"; f=log.open("a"); child=subprocess.Popen([sys.executable,"-m","everbar_motherlode.cli","build","--root",str(a.root),"--config",str(a.config.resolve()),"--resume"],stdout=f,stderr=subprocess.STDOUT,start_new_session=True)

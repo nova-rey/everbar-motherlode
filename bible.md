@@ -58,6 +58,10 @@ Accepted `performance-flattening-v1` before Brick 3: original source and candida
 
 Bounded remote validation confirmed a formerly controller-rejected MAESTRO sample is accepted after conversion. The converted ASAP sample no longer has the zero-duration rejection but surfaces distinct CC121 and unsupported-meter policy evidence, which remains unmodified and queued for a separate decision.
 
+## 2026-08-21 — CC121 reset consumption
+
+Extended `performance-flattening-v1` to consume channel-local CC121 Reset All Controllers at the exact source tick: sustain/sostenuto state and latches reset, pedal-deferred notes release at that tick, and the controller event is removed only after that state transition. Conversion receipts now count consumed CC121 resets; unsupported meters remain Brick 3 evidence only.
+
 ## 2026-08-21 — Brick 3 semantic-review handoff
 
 Added a development-thread brief separating the invalid remote-path receipts from genuine MAESTRO pedal-controller and ASAP sustain/zero-duration-note findings. The brief records sample evidence and decision options while preserving the rule that Motherlode must not alter Brick 3 policy or silently repair source semantics.

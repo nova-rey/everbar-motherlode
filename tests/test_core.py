@@ -53,4 +53,25 @@ def test_performance_flattening_renders_pedals_and_drops_noops():
     assert (20,60) in offs and (45,62) in offs
     assert not any(getattr(msg,"control",None) in {64,66,67} for _,msg in events)
     assert not any(getattr(msg,"note",None)==70 for _,msg in events)
-    assert counts == {"cc64_rendered":2,"cc66_rendered":2,"cc67_discarded":1,"zero_duration_notes_dropped":1,"end_of_track_noteoffs":0}
+    assert counts == {"cc64_rendered":2,"cc66_rendered":2,"cc67_discarded":1,"cc121_resets_consumed":0,"zero_duration_notes_dropped":1,"end_of_track_noteoffs":0}
+def test_performance_flattening_consumes_cc121_at_exact_tick():
+    import mido
+    source=mido.MidiFile(); track=mido.MidiTrack(); source.tracks.append(track)
+    track.extend([
+        mido.Message("control_change",channel=0,control=64,value=127,time=0),
+        mido.Message("note_on",channel=0,note=60,velocity=90,time=0),
+        mido.Message("note_off",channel=0,note=60,velocity=0,time=10),
+        mido.Message("control_change",channel=0,control=121,value=0,time=5),
+        mido.Message("note_on",channel=0,note=62,velocity=90,time=0),
+        mido.Message("control_change",channel=0,control=66,value=127,time=0),
+        mido.Message("note_off",channel=0,note=62,velocity=0,time=10),
+        mido.Message("control_change",channel=0,control=121,value=0,time=5),
+    ])
+    flattened,counts=performance_flattening_v1(source)
+    tick=0; offs=[]
+    for msg in flattened.tracks[0]:
+        tick+=msg.time
+        if msg.type=="note_off": offs.append((tick,msg.note))
+        assert not (msg.type=="control_change" and msg.control==121)
+    assert offs == [(15,60),(30,62)]
+    assert counts["cc121_resets_consumed"] == 2

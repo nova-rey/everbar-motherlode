@@ -11,6 +11,9 @@ and unflattened derived candidate.
 - Render CC64 sustain into delayed note-off lifetimes.
 - Render CC66 sostenuto into delayed note-off lifetimes for notes sounding when
   the pedal is engaged.
+- Consume CC121 Reset All Controllers at its exact source tick: clear the
+  channel's sustain/sostenuto state and latches, release any pedal-deferred
+  note-offs at that tick, then remove the reset event from the V1 derivative.
 - Discard CC67 soft-pedal events because V1 has no representable equivalent.
 - Drop a note-on/note-off pair only when it is verified to have zero duration.
 - Preserve all other events and leave every remaining Brick 3 decision to the
@@ -24,8 +27,8 @@ For every candidate, Motherlode writes
 - policy ID;
 - source candidate and output paths;
 - SHA-256 hashes of the unflattened and flattened MIDI bytes;
-- counts for CC64/CC66 render operations, CC67 removals, zero-duration drops,
-  and any end-of-track note-off flushes; and
+- counts for CC64/CC66 render operations, CC67 removals, CC121 resets,
+  zero-duration drops, and any end-of-track note-off flushes; and
 - a receipt hash.
 
 The flattened MIDI is written beneath `derived/<dataset>/prebrick3/`. It is a

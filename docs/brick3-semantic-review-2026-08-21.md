@@ -56,8 +56,10 @@ rules and receipt format are documented in
 [performance-flattening-v1.md](performance-flattening-v1.md). The original
 source and the unflattened derived candidate remain preserved.
 
-This decision resolves only CC64, CC66, CC67, and verified zero-duration note
-pairs. It does not relax Brick 3.
+This decision resolves CC64, CC66, CC67, CC121 Reset All Controllers, and
+verified zero-duration note pairs. CC121 is consumed at its source tick only
+after resetting the associated held-controller state; it is not merely
+stripped. This does not relax Brick 3.
 
 ## Remaining decisions required from Everbar
 
