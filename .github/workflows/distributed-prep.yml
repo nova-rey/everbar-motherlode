@@ -103,7 +103,9 @@ jobs:
           bundle="$RUNNER_TEMP/everbar.bundle"
           rclone copyto "$EVERBAR_BUNDLE_URI" "$bundle"
           rclone copyto "$EVERBAR_BUNDLE_URI.sha256" "$bundle.sha256"
-          (cd "$RUNNER_TEMP" && sha256sum -c "$(basename "$bundle").sha256")
+          expected="$(tr -d '\\n' < "$bundle.sha256")"
+          actual="$(sha256sum "$bundle" | awk '{print $1}')"
+          test "$actual" = "$expected"
           git clone --quiet "$bundle" "$EVERBAR_CHECKOUT"
           git -C "$EVERBAR_CHECKOUT" checkout --quiet --detach "$EVERBAR_SHA"
           test "$(git -C "$EVERBAR_CHECKOUT" rev-parse HEAD)" = "$EVERBAR_SHA"

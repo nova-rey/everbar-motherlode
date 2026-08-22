@@ -93,3 +93,7 @@ Corrected the partition-state label so the deterministic worker and distributed 
 ## 2026-08-22 — Immutable Everbar authority bundle
 
 The configured Brick 3 SHA is present in the trusted local Everbar checkout but not fetchable from the private remote. The public worker therefore restores a checksummed private R2 Git bundle, checks out that exact SHA, and fails closed on either hash mismatch. This preserves the pinned semantic authority without silently changing policy or publishing the upstream repository.
+
+## 2026-08-22 — Authority bundle checksum receipt
+
+The immutable bundle sidecar stores the digest alone. The worker compares that digest directly to the fetched bundle's SHA-256 rather than treating it as a filename-bearing `sha256sum -c` record. The verification remains fail-closed while matching the storage receipt format.
