@@ -153,3 +153,7 @@ The active Motherlode path is variable-length MIDI parsing, stateful performance
 ## 2026-08-22 — Production-path performance pass
 
 Motherlode now avoids a repeated whole-tree GigaMIDI scan for every worker by publishing one deterministic lock-protected partition manifest. It also fuses source timing/inventory into the required raw-byte parse, eliminates retained note-message lists used only as booleans, makes canonical bar occupancy linear in notes plus bars, and permits a fail-closed direct invocation of the exact pinned Everbar checkout CLI. These are strictly operational improvements: raw bytes, source identities, partition ownership, receipts, Brick 3 authority, and canonical output remain unchanged.
+
+## 2026-08-22 — Detached watchdog escalation
+
+Added a read-only hourly Motherlode watchdog and user-level systemd timer. It verifies worker/controller/monitor liveness, receipt freshness, and conversion movement through the persistent Lightning root, then uses Codex's thread queue to request repair only on a debounced fault. The watchdog never restarts workers or makes corpus-policy decisions itself.

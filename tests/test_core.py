@@ -1,4 +1,4 @@
-import io, json, sqlite3, tarfile, zipfile
+import io, json, os, sqlite3, subprocess, tarfile, zipfile
 from pathlib import Path
 from types import SimpleNamespace
 import pytest
@@ -209,3 +209,28 @@ def test_performance_flattening_consumes_cc121_at_exact_tick():
         assert not (msg.type=="control_change" and msg.control==121)
     assert offs == [(15,60),(30,62)]
     assert counts["cc121_resets_consumed"] == 2
+
+def test_watchdog_escalates_only_for_a_debounced_fault(tmp_path):
+    repo = Path(__file__).resolve().parents[1]
+    fake_bin = tmp_path / "bin"; fake_bin.mkdir()
+    payload = tmp_path / "probe.json"; queue_log = tmp_path / "queue.log"
+    ssh = fake_bin / "ssh"; ssh.write_text("#!/bin/sh\ncat \"$FAKE_SSH_PAYLOAD\"\n"); ssh.chmod(0o755)
+    codex = fake_bin / "codex"; codex.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$FAKE_CODEX_LOG\"\n"); codex.chmod(0o755)
+    config_file = tmp_path / "watchdog.env"
+    config_file.write_text("\n".join((
+        "CODEX_THREAD=fixture-thread", "MOTHERLODE_SSH=fixture@host", "MOTHERLODE_ROOT=/fixture/root",
+        f"WATCHDOG_STATE_DIR={tmp_path / 'state'}", "MAX_PROGRESS_AGE_SECONDS=900",
+        "NO_PROGRESS_GRACE_SECONDS=7200", "ALERT_COOLDOWN_SECONDS=14400", "",
+    )))
+    config_file.chmod(0o600)
+    healthy = {"pids":{"queue-gigamidi-after-pdmx-chunks.pid":True,"monitor-pdmx-giga.pid":True,"pdmx-chunk-worker-0.pid":True},"progress_exists":True,"progress_age_seconds":1,"state":"RUNNING","stage":"PDMX_DERIVATION","converted_streams":12,"converted_by_dataset":{"pdmx":12}}
+    payload.write_text(json.dumps(healthy))
+    env = {**os.environ, "PATH":str(fake_bin) + os.pathsep + os.environ["PATH"], "FAKE_SSH_PAYLOAD":str(payload), "FAKE_CODEX_LOG":str(queue_log), "WATCHDOG_CONFIG":str(config_file)}
+    command = ["bash", str(repo / "scripts" / "motherlode-watchdog.sh")]
+    assert subprocess.run(command, env=env, check=False).returncode == 0
+    assert not queue_log.exists()
+    payload.write_text(json.dumps({"pids":{},"progress_exists":False,"state":"FAILED","converted_streams":12}))
+    assert subprocess.run(command, env=env, check=False).returncode == 0
+    assert "queue --thread fixture-thread" in queue_log.read_text()
+    assert subprocess.run(command, env=env, check=False).returncode == 0
+    assert len(queue_log.read_text().splitlines()) == 1

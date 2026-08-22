@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the Everbar Motherlode watchdog every hour
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+Persistent=true
+Unit=everbar-motherlode-watchdog.service
+
+[Install]
+WantedBy=timers.target
