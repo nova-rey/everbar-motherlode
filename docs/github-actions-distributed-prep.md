@@ -57,6 +57,8 @@ The largest risks are source download/object-storage bandwidth, source-specific 
 
 The workflow is deliberately manual-only and has not launched a paid or full 20-way corpus run. A final aggregation/verifier should read only `completion.json` packages, require every expected shard index exactly once, union item IDs, reject overlaps, and then invoke the existing `merge-shards` logic in a dedicated trusted environment.
 
+For the first Actions smoke run, use `pop909`, not PDMX or GigaMIDI. It keeps input staging, runner disk use, and failure diagnosis bounded while exercising the exact same distributed interface.
+
 The workflow's `verify` job performs those package-level checks and writes `runs/<run-id>/<dataset>/run-manifest.json`. It fails if a shard is missing, a marker is malformed, or any item ID appears in two shard packages. The same check is available outside Actions:
 
 ```bash

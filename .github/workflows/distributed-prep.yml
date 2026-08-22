@@ -8,7 +8,7 @@ on:
         required: true
         default: pdmx
         type: choice
-        options: [pdmx, gigamidi, maestro, asap, aria-midi]
+        options: [pop909, pdmx, gigamidi, maestro, asap, aria-midi]
       shard_count:
         description: Deterministic shard count (start with 2 or 4)
         required: true
