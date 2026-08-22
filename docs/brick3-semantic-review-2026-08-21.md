@@ -49,20 +49,19 @@ The zero-duration event may be an encoding artifact or may require an explicit
 interpretation rule. Motherlode must not discard or repair it implicitly.
 Again, this is a sample-level finding and not a claimed corpus-wide rate.
 
-## Decision required from Everbar
+## Decision record
 
-Choose and version one policy direction before Motherlode makes either dataset
-training eligible:
+Everbar accepted `performance-flattening-v1` upstream of Brick 3. Its exact
+rules and receipt format are documented in
+[performance-flattening-v1.md](performance-flattening-v1.md). The original
+source and the unflattened derived candidate remain preserved.
 
-1. Keep the current policy. MAESTRO/ASAP streams with these events remain
-   rejected; report their acceptance rates after a clean rerun.
-2. Extend upstream Brick 3 to represent or explicitly normalize the relevant
-   controller semantics and/or zero-duration events. This must be an Everbar
-   policy/version decision with tests and a new policy hash.
-3. Define a source-conversion policy that removes or transforms the events.
-   This is a semantic change, must be explicit and receipted, and must not be
-   presented as original MIDI.
+This decision resolves only CC64, CC66, CC67, and verified zero-duration note
+pairs. It does not relax Brick 3.
 
-Until then, Motherlode preserves original bytes, derived candidates, and
-rejection diagnostics, but does not admit rejected candidates into a training
-lane.
+## Remaining decisions required from Everbar
+
+The converted ASAP sample exposes separate CC121 and unsupported-meter
+rejections. Any treatment of those conditions needs its own reviewed policy;
+Motherlode continues to preserve the source, conversion receipt, and Brick 3
+diagnostics without admitting rejected candidates into a training lane.

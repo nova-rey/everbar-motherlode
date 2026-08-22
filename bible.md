@@ -56,6 +56,8 @@ Fixed the deployment boundary so a detached build can select its pinned Everbar 
 
 Accepted `performance-flattening-v1` before Brick 3: original source and candidate MIDI remain immutable; CC64 sustain and CC66 sostenuto are rendered into note lifetimes; CC67 is explicitly discarded as unrepresentable for V1; and verified zero-duration note pairs are dropped. Every conversion writes source/output hashes, operation counts, and a receipt before the converted stream reaches Brick 3.
 
+Bounded remote validation confirmed a formerly controller-rejected MAESTRO sample is accepted after conversion. The converted ASAP sample no longer has the zero-duration rejection but surfaces distinct CC121 and unsupported-meter policy evidence, which remains unmodified and queued for a separate decision.
+
 ## 2026-08-21 — Brick 3 semantic-review handoff
 
 Added a development-thread brief separating the invalid remote-path receipts from genuine MAESTRO pedal-controller and ASAP sustain/zero-duration-note findings. The brief records sample evidence and decision options while preserving the rule that Motherlode must not alter Brick 3 policy or silently repair source semantics.
