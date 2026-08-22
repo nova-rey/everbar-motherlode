@@ -133,3 +133,7 @@ PDMX workers now build one lock-protected immutable mapping from the official no
 ## 2026-08-22 — Correct resumable PDMX chunk worker
 
 Added the durable worker launcher used by the Lightning deployment. It checks a quoted receipt state, uses the same fixed-width partition labels as Motherlode, skips only validated completed chunks, and assigns four deterministic slots. This prevents resumed runs from silently recomputing completed PDMX chunks.
+
+## 2026-08-22 — Four-slot resumable wave controller
+
+Generalized the validated receipt guard for PDMX and GigaMIDI and added a four-slot Lightning wave controller. The controller serializes GigaMIDI's one-time nested extraction, then resumes independent deterministic partitions and performs only the existing reconciliation/merge handoff. It does not change corpus semantics or introduce shared writable worker state.
