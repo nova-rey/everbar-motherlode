@@ -17,8 +17,8 @@ everbar-motherlode distributed-shard \
   --root "$RUNNER_TEMP/motherlode" \
   --dataset pdmx --shard-index 7 --shard-count 20 \
   --run-id 20260822-pdmx-smoke \
-  --input-uri r2:motherlode-input \
-  --output-uri r2:motherlode-output
+  --input-uri r2:everbar-motherlode-input \
+  --output-uri r2:everbar-motherlode-output
 ```
 
 `input_uri` contains the already-authorized immutable source layout `raw/<dataset-id>/`. The worker never relies on a sibling runner. It emits this immutable package:
@@ -42,6 +42,8 @@ The repository chooses no paid vendor. It supports any rclone-compatible storage
 
 Create a protected GitHub Environment named `corpus-write`, and add `MOTHERLODE_RCLONE_CONFIG_B64`: base64 of a least-privilege rclone configuration allowed to read the selected input prefix and write only the selected output prefix. It is used only in the manual `workflow_dispatch` workflow. Do not enable it for pull requests or forks, and do not put credentials, token strings, or generated corpus data in Git.
 
+The project R2 configuration uses `r2:everbar-motherlode-input` and `r2:everbar-motherlode-output`. They are private buckets; `raw/<dataset-id>/` is staged into the input bucket before a dispatch, and runs are published under the output bucket's `runs/<run-id>/` prefix. The GitHub secret contains the endpoint and S3 access pair only; it is never committed or printed by the workflow.
+
 ## Launch sequence
 
 1. Run the local equivalence test (`uv run pytest -q`). It proves stable complete, non-overlapping partition ownership and package/retry behavior on a deterministic fixture.
@@ -64,5 +66,5 @@ The workflow's `verify` job performs those package-level checks and writes `runs
 ```bash
 everbar-motherlode verify-distributed-run --root /tmp/verify \
   --dataset pdmx --shard-count 20 --run-id 20260822-pdmx-full \
-  --output-uri r2:motherlode-output
+  --output-uri r2:everbar-motherlode-output
 ```

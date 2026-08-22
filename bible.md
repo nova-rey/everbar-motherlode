@@ -81,3 +81,7 @@ The GitHub Actions smoke path now selects POP909 as its intentionally small firs
 ## 2026-08-21 — Brick 3 semantic-review handoff
 
 Added a development-thread brief separating the invalid remote-path receipts from genuine MAESTRO pedal-controller and ASAP sustain/zero-duration-note findings. The brief records sample evidence and decision options while preserving the rule that Motherlode must not alter Brick 3 policy or silently repair source semantics.
+
+## 2026-08-22 — Cloudflare R2 persistent storage handoff
+
+Provisioned private `everbar-motherlode-input` and `everbar-motherlode-output` R2 buckets and a protected `corpus-write` GitHub Environment secret containing the rclone configuration. The credential was verified with an S3-compatible bucket listing and is never represented in repository files, logs, or workflow output. Distributed-preparation documentation now uses the provisioned rclone URIs.
