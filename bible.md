@@ -121,3 +121,7 @@ The protected input-staging workflow now dispatches its own immutable processing
 ## 2026-08-22 — Authorized Lightning GigaMIDI transfer
 
 GigaMIDI staging has a protected Lightning-to-R2 path for the already acquired archive and its metadata companion. It transfers through disposable GitHub Actions storage using a protected SSH deploy key, hashes both source-qualified files, publishes payload before the completion marker, and immediately dispatches the normal deterministic shard swarm. This deliberately avoids another Hugging Face request and keeps the credential boundary limited to the protected environment.
+
+## 2026-08-22 — Source-specific license evidence review
+
+Reviewed the manual and unclear acquisition set against official project, dataset-card, and paper evidence. ATEPP, GiantMIDI-Piano, and Los Angeles MIDI now have explicit source-qualified records; only Los Angeles has an automatable public payload endpoint. PiJAMA, MID-FiLD, Pop1K7, and Symphony MIDI remain excluded because a code license, paper, or project page does not establish payload training rights. The review preserves user term acceptance without treating it as a substitute for upstream rights.

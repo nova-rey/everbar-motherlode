@@ -20,3 +20,10 @@ where applicable.
 | GigaMIDI v2 | [payload](https://huggingface.co/datasets/Metacreation/GigaMIDI/resolve/main/Final_GigaMIDI_V2.0_Final.zip), [metadata](https://huggingface.co/datasets/Metacreation/GigaMIDI/resolve/main/Final-Metadata-Extended-GigaMIDI-Dataset-updated.csv) | Lee et al., GigaMIDI, TISMIR 2025 | Payload and source-qualified metadata are downloaded separately. |
 | Aria-MIDI | [deduplicated extended payload](https://huggingface.co/datasets/loubb/aria-midi/resolve/main/aria-midi-v1-deduped-ext.tar.gz?download=true) | Bradshaw and Colton, [arXiv:2504.15071](https://arxiv.org/abs/2504.15071) | Original MIDI is indexed; no source provenance is discarded. |
 | GuitarSet annotations | [Zenodo annotation archive](https://zenodo.org/records/3371780/files/annotation.zip?download=1) | Xiang et al. (2018) | Recorded as an annotation reference only; it is not treated as complete source payload or V1-eligible data. |
+
+## Reviewed manual-gated sources
+
+The [2026-08-22 license review](docs/license-review-2026-08-22.md) records the
+evidence and lane decisions for ATEPP, GiantMIDI-Piano, Los Angeles MIDI,
+PiJAMA, MID-FiLD, Pop1K7, Symphony MIDI, and FiloSax. A manual gate means the
+tooling will not invent a download URL or bypass an upstream agreement.

@@ -7,7 +7,7 @@ on:
         description: Approved raw dataset to fetch and stage into private R2
         required: true
         type: choice
-        options: [commu, groove-midi, maestro, asap, emopia, gigamidi, aria-midi, pdmx]
+        options: [commu, groove-midi, maestro, asap, emopia, gigamidi, aria-midi, lamd, pdmx]
       force:
         description: Replace an already completed immutable input package
         required: true
