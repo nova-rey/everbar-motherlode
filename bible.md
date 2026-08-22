@@ -161,3 +161,14 @@ Added a read-only hourly Motherlode watchdog and user-level systemd timer. It ve
 The deployed user service pins the local Codex CLI directory in its execution PATH. This preserves the queue-based escalation mechanism under systemd's intentionally minimal environment.
 
 The remote probe passes the configured corpus root explicitly into the SSH command, so receipt and PID checks execute against the intended persistent root rather than inheriting an absent remote shell variable.
+
+## 2026-08-22 — POP909 fast-lane proof-of-concept builder
+
+Added an isolated POP909-only preparation path that reuses the verified
+official source archive, indexes all 909 source pieces and sibling tracks,
+derives MELODY/BRIDGE/PIANO candidates, invokes the pinned Everbar Brick 3
+authority in-process, preserves canonical feature-base receipts, performs
+exact within-POP909 dedupe and source-piece splits, profiles Brick 4 caps, and
+materializes a clearly non-production packed training view. The path records
+source/license/revision evidence and has no access to Motherlode's central
+production state.
