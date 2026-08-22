@@ -13,11 +13,18 @@ on:
         required: true
         default: false
         type: boolean
+      shard_count:
+        description: Deterministic processing shards to dispatch after successful staging
+        required: true
+        default: "20"
+        type: choice
+        options: ["1", "2", "4", "8", "12", "16", "20"]
 
 # Manual-only: this workflow receives storage write credentials and must never
 # run for untrusted pull requests or forks.
 permissions:
   contents: read
+  actions: write
 
 jobs:
   stage:
@@ -90,3 +97,13 @@ jobs:
           PY
           rclone copy --exclude staging-completion.json "$root/raw/$DATASET" "$INPUT_URI/raw/$DATASET"
           rclone copyto "$root/raw/$DATASET/staging-completion.json" "$INPUT_URI/raw/$DATASET/staging-completion.json"
+      - name: Enqueue deterministic processing swarm
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHARD_COUNT: ${{ inputs.shard_count }}
+        run: |
+          run_id="staged-${DATASET}-${GITHUB_RUN_ID}"
+          gh workflow run distributed-prep.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_SHA" \
+            -f dataset="$DATASET" -f shard_count="$SHARD_COUNT" -f run_id="$run_id" \
+            -f input_uri="$INPUT_URI" -f output_uri="r2:everbar-motherlode-output" -f force=false
+          echo "Queued processing run: $run_id" >> "$GITHUB_STEP_SUMMARY"

@@ -113,3 +113,7 @@ Expanded the distributed processing workflow selector to cover every current app
 ## 2026-08-22 — Runner package-index isolation
 
 Rclone installation now refreshes only the official Ubuntu package source on disposable Actions runners. A transient inconsistent third-party Chrome package index can no longer abort an otherwise healthy corpus shard before it contacts R2; failed shards remain safely retryable under their existing immutable run IDs.
+
+## 2026-08-22 — Stage-to-swarm automation
+
+The protected input-staging workflow now dispatches its own immutable processing swarm after and only after R2 staging completes. The shard count remains an explicit bounded input, the run ID is tied to the staging run, and a staging failure cannot start workers against incomplete input. This removes manual handoff between successful acquisition and CPU processing without granting write credentials to untrusted events.

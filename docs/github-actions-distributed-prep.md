@@ -49,9 +49,10 @@ raw source. It downloads the registry-declared payload (and source-qualified
 metadata or the PDMX subset manifest where applicable), writes a SHA-256
 `staging-manifest.json`, uploads payload first, and uploads
 `staging-completion.json` last. The workflow refuses to replace an existing
-completed input package unless its explicit `force` input is selected. A
-processing dispatch must target only an input package with that completion
-marker.
+completed input package unless its explicit `force` input is selected. On a
+successful protected staging job it automatically dispatches the selected
+number of deterministic processing shards with a unique run ID. A failed stage
+does not dispatch processing; retrying the stage is the only required action.
 
 The public workflow restores its exact, private Everbar Brick 3 authority from the immutable `tooling/everbar/<sha>.bundle` object in the input bucket. The bundle checksum and checked-out Git SHA are both verified. This is an explicit pinned integration boundary: Motherlode does not copy or fork Brick 3 semantics, and a run cannot proceed if the authority bundle is unavailable or mismatched.
 
