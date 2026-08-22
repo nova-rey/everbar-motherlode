@@ -157,3 +157,7 @@ Motherlode now avoids a repeated whole-tree GigaMIDI scan for every worker by pu
 ## 2026-08-22 — Detached watchdog escalation
 
 Added a read-only hourly Motherlode watchdog and user-level systemd timer. It verifies worker/controller/monitor liveness, receipt freshness, and conversion movement through the persistent Lightning root, then uses Codex's thread queue to request repair only on a debounced fault. The watchdog never restarts workers or makes corpus-policy decisions itself.
+
+The deployed user service pins the local Codex CLI directory in its execution PATH. This preserves the queue-based escalation mechanism under systemd's intentionally minimal environment.
+
+The remote probe passes the configured corpus root explicitly into the SSH command, so receipt and PID checks execute against the intended persistent root rather than inheriting an absent remote shell variable.

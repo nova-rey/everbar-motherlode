@@ -74,7 +74,8 @@ print(json.dumps({
 PY
 )
 
-if ! raw=$(MOTHERLODE_ROOT="$MOTHERLODE_ROOT" ssh -o BatchMode=yes -o ConnectTimeout=15 "$MOTHERLODE_SSH" "python3 - <<'PY'
+remote_root=$(printf '%q' "$MOTHERLODE_ROOT")
+if ! raw=$(ssh -o BatchMode=yes -o ConnectTimeout=15 "$MOTHERLODE_SSH" "MOTHERLODE_ROOT=$remote_root python3 - <<'PY'
 $probe
 PY" 2>/dev/null); then
   raw='{"probe_error":"ssh_unavailable"}'

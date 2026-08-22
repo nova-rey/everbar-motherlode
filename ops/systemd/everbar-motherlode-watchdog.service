@@ -4,5 +4,6 @@ Description=Everbar Motherlode hourly health watchdog
 [Service]
 Type=oneshot
 EnvironmentFile=%h/.config/everbar-motherlode/watchdog.env
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/bin/bash /home/nyx/everbar-motherlode/scripts/motherlode-watchdog.sh
 NoNewPrivileges=true
