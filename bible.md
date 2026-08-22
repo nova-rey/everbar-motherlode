@@ -117,3 +117,7 @@ Rclone installation now refreshes only the official Ubuntu package source on dis
 ## 2026-08-22 — Stage-to-swarm automation
 
 The protected input-staging workflow now dispatches its own immutable processing swarm after and only after R2 staging completes. The shard count remains an explicit bounded input, the run ID is tied to the staging run, and a staging failure cannot start workers against incomplete input. This removes manual handoff between successful acquisition and CPU processing without granting write credentials to untrusted events.
+
+## 2026-08-22 — Authorized Lightning GigaMIDI transfer
+
+GigaMIDI staging has a protected Lightning-to-R2 path for the already acquired archive and its metadata companion. It transfers through disposable GitHub Actions storage using a protected SSH deploy key, hashes both source-qualified files, publishes payload before the completion marker, and immediately dispatches the normal deterministic shard swarm. This deliberately avoids another Hugging Face request and keeps the credential boundary limited to the protected environment.

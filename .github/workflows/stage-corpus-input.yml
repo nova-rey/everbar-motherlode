@@ -95,7 +95,10 @@ jobs:
           print(json.dumps({"dataset_id": dataset_id, "artifact_count": len(records),
                             "bytes": sum(item["bytes"] for item in records)}))
           PY
-          rclone copy --exclude staging-completion.json "$root/raw/$DATASET" "$INPUT_URI/raw/$DATASET"
+          # Metadata companions deliberately have distinct source IDs. Copy the
+          # whole ephemeral raw tree so source-qualified companions survive;
+          # publish only this dataset's marker after every payload object.
+          rclone copy --exclude staging-completion.json "$root/raw" "$INPUT_URI/raw"
           rclone copyto "$root/raw/$DATASET/staging-completion.json" "$INPUT_URI/raw/$DATASET/staging-completion.json"
       - name: Enqueue deterministic processing swarm
         env:

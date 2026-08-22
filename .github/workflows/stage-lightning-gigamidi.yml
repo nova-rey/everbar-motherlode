@@ -1,0 +1,94 @@
+name: Stage authorized GigaMIDI from Lightning
+
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Replace an already completed immutable input package
+        required: true
+        default: false
+        type: boolean
+      shard_count:
+        description: Deterministic processing shards to dispatch after successful staging
+        required: true
+        default: "20"
+        type: choice
+        options: ["1", "2", "4", "8", "12", "16", "20"]
+
+# Manual-only: this uses protected Lightning read access and private R2 write
+# access. It never runs from pull requests or forks.
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    environment: corpus-write
+    env:
+      INPUT_URI: r2:everbar-motherlode-input
+      LIGHTNING_STUDIO_ID: 01m0k20ds25pkvpnk7x34wqt8e
+      LIGHTNING_GIGA_PATH: /teamspace/studios/this_studio/motherlode-root/raw/gigamidi/gigamidi.download
+      LIGHTNING_GIGA_METADATA_PATH: /teamspace/studios/this_studio/motherlode-root/raw/gigamidi-metadata/gigamidi-metadata.download
+      MOTHERLODE_RCLONE_CONFIG_B64: ${{ secrets.MOTHERLODE_RCLONE_CONFIG_B64 }}
+      LIGHTNING_SSH_PRIVATE_KEY: ${{ secrets.LIGHTNING_SSH_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install and configure transfer clients
+        run: |
+          sudo apt-get update -o Dir::Etc::sourcelist="sources.list.d/ubuntu.sources" -o Dir::Etc::sourceparts="-"
+          sudo apt-get install --yes rclone
+          test -n "$MOTHERLODE_RCLONE_CONFIG_B64"
+          test -n "$LIGHTNING_SSH_PRIVATE_KEY"
+          install -d -m 700 "$RUNNER_TEMP/rclone" "$RUNNER_TEMP/ssh"
+          printf '%s' "$MOTHERLODE_RCLONE_CONFIG_B64" | base64 --decode > "$RUNNER_TEMP/rclone/rclone.conf"
+          printf '%s\n' "$LIGHTNING_SSH_PRIVATE_KEY" > "$RUNNER_TEMP/ssh/lightning_rsa"
+          chmod 600 "$RUNNER_TEMP/rclone/rclone.conf" "$RUNNER_TEMP/ssh/lightning_rsa"
+          echo "RCLONE_CONFIG=$RUNNER_TEMP/rclone/rclone.conf" >> "$GITHUB_ENV"
+      - name: Refuse accidental overwrite of a completed input package
+        if: ${{ !inputs.force }}
+        run: |
+          existing="$(rclone lsf "$INPUT_URI/raw/gigamidi/staging-completion.json")"
+          if printf '%s\n' "$existing" | grep -qx staging-completion.json; then
+            echo "completed GigaMIDI input package already exists" >&2
+            exit 1
+          fi
+      - name: Copy existing authorized payload from Lightning and verify it
+        run: |
+          root="$RUNNER_TEMP/motherlode/raw"
+          mkdir -p "$root/gigamidi" "$root/gigamidi-metadata"
+          ssh_opts=(-i "$RUNNER_TEMP/ssh/lightning_rsa" -o BatchMode=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=accept-new)
+          source_host="s_${LIGHTNING_STUDIO_ID}@ssh.lightning.ai"
+          scp "${ssh_opts[@]}" "$source_host:$LIGHTNING_GIGA_PATH" "$root/gigamidi/gigamidi.download.partial"
+          scp "${ssh_opts[@]}" "$source_host:$LIGHTNING_GIGA_METADATA_PATH" "$root/gigamidi-metadata/gigamidi-metadata.download.partial"
+          mv "$root/gigamidi/gigamidi.download.partial" "$root/gigamidi/gigamidi.download"
+          mv "$root/gigamidi-metadata/gigamidi-metadata.download.partial" "$root/gigamidi-metadata/gigamidi-metadata.download"
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          raw = Path(os.environ['RUNNER_TEMP']) / 'motherlode' / 'raw'
+          files = [raw / 'gigamidi' / 'gigamidi.download', raw / 'gigamidi-metadata' / 'gigamidi-metadata.download']
+          records = [{'path': path.relative_to(raw).as_posix(), 'bytes': path.stat().st_size,
+                      'sha256': hashlib.file_digest(path.open('rb'), 'sha256').hexdigest()} for path in files]
+          manifest = {'state': 'COMPLETE', 'dataset_id': 'gigamidi', 'transfer': 'lightning-existing-authorized-payload',
+                      'pipeline_commit': os.environ['GITHUB_SHA'], 'artifacts': records}
+          target = raw / 'gigamidi' / 'staging-manifest.json'
+          target.write_text(json.dumps(manifest, sort_keys=True, indent=2) + '\n')
+          (raw / 'gigamidi' / 'staging-completion.json').write_text(json.dumps(manifest, sort_keys=True, indent=2) + '\n')
+          print(json.dumps({'artifact_count': len(records), 'bytes': sum(item['bytes'] for item in records)}))
+          PY
+      - name: Publish payload before completion marker
+        run: |
+          root="$RUNNER_TEMP/motherlode/raw"
+          rclone copy --exclude staging-completion.json "$root" "$INPUT_URI/raw"
+          rclone copyto "$root/gigamidi/staging-completion.json" "$INPUT_URI/raw/gigamidi/staging-completion.json"
+      - name: Enqueue deterministic GigaMIDI processing swarm
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHARD_COUNT: ${{ inputs.shard_count }}
+        run: |
+          run_id="staged-gigamidi-${GITHUB_RUN_ID}"
+          gh workflow run distributed-prep.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_SHA" \
+            -f dataset=gigamidi -f shard_count="$SHARD_COUNT" -f run_id="$run_id" \
+            -f input_uri="$INPUT_URI" -f output_uri="r2:everbar-motherlode-output" -f force=false
+          echo "Queued processing run: $run_id" >> "$GITHUB_STEP_SUMMARY"
