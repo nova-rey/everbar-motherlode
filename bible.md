@@ -129,3 +129,7 @@ Reviewed the manual and unclear acquisition set against official project, datase
 ## 2026-08-22 — Deterministic PDMX partition manifest
 
 PDMX workers now build one lock-protected immutable mapping from the official no-license-conflict list to deterministic partition ownership. Later shards consume only their assigned path list instead of repeatedly walking the full extracted tree and rebuilding the allow-list. Raw hashes and track note inventory are reused within each source piece; neither change alters candidate identities, source ownership, Brick 3 authority, or V2 provenance.
+
+## 2026-08-22 — Correct resumable PDMX chunk worker
+
+Added the durable worker launcher used by the Lightning deployment. It checks a quoted receipt state, uses the same fixed-width partition labels as Motherlode, skips only validated completed chunks, and assigns four deterministic slots. This prevents resumed runs from silently recomputing completed PDMX chunks.
