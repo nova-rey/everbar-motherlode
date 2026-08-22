@@ -1,0 +1,91 @@
+name: Stage authorized corpus input
+
+on:
+  workflow_dispatch:
+    inputs:
+      dataset:
+        description: Approved raw dataset to fetch and stage into private R2
+        required: true
+        type: choice
+        options: [commu, groove-midi, maestro, asap, emopia, gigamidi, aria-midi, pdmx]
+      force:
+        description: Replace an already completed immutable input package
+        required: true
+        default: false
+        type: boolean
+
+# Manual-only: this workflow receives storage write credentials and must never
+# run for untrusted pull requests or forks.
+permissions:
+  contents: read
+
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    environment: corpus-write
+    env:
+      DATASET: ${{ inputs.dataset }}
+      FORCE: ${{ inputs.force }}
+      INPUT_URI: r2:everbar-motherlode-input
+      MOTHERLODE_RCLONE_CONFIG_B64: ${{ secrets.MOTHERLODE_RCLONE_CONFIG_B64 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Install acquisition dependencies
+        run: uv sync --frozen
+      - name: Install and configure R2 client
+        run: |
+          sudo apt-get update && sudo apt-get install --yes rclone
+          test -n "$MOTHERLODE_RCLONE_CONFIG_B64"
+          install -d -m 700 "$RUNNER_TEMP/rclone"
+          printf '%s' "$MOTHERLODE_RCLONE_CONFIG_B64" | base64 --decode > "$RUNNER_TEMP/rclone/rclone.conf"
+          chmod 600 "$RUNNER_TEMP/rclone/rclone.conf"
+          echo "RCLONE_CONFIG=$RUNNER_TEMP/rclone/rclone.conf" >> "$GITHUB_ENV"
+      - name: Refuse accidental overwrite of a completed input package
+        if: ${{ !inputs.force }}
+        run: |
+          existing="$(rclone lsf "$INPUT_URI/raw/$DATASET/staging-completion.json")"
+          if printf '%s\n' "$existing" | grep -qx staging-completion.json; then
+            echo "completed input package already exists for $DATASET" >&2
+            exit 1
+          fi
+      - name: Acquire, hash, and stage immutable raw input
+        run: |
+          root="$RUNNER_TEMP/motherlode"
+          export ROOT="$root"
+          uv run python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          from everbar_motherlode.core import config, download, registry, writej
+
+          root = Path(os.environ["ROOT"])
+          cfg = config(Path("configs/motherlode-v1.toml"))
+          dataset_id = os.environ["DATASET"]
+          source = next((item for item in registry(cfg) if item["id"] == dataset_id), None)
+          if source is None or source.get("training") != "ALLOWED" or source.get("role") != "raw":
+              raise SystemExit("dataset is not an approved raw training source")
+          artifact = download(root, source)
+          artifacts = [artifact]
+          if source.get("metadata_url"):
+              artifacts.append(download(root, {**source, "id": dataset_id + "-metadata", "url": source["metadata_url"]}))
+          if dataset_id == "pdmx":
+              subset = download(root, {**source, "id": dataset_id + "-subset-download", "url": source["subset_url"]})
+              final_subset = root / "raw" / dataset_id / (dataset_id + "-subset-paths.tar.gz")
+              subset.replace(final_subset)
+              artifacts.append(final_subset)
+          records = []
+          for path in artifacts:
+              records.append({"path": path.relative_to(root).as_posix(), "bytes": path.stat().st_size,
+                              "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
+          manifest = {"state": "COMPLETE", "dataset_id": dataset_id, "artifacts": records,
+                      "pipeline_commit": os.environ.get("GITHUB_SHA"), "source_url": source["url"]}
+          writej(root / "raw" / dataset_id / "staging-manifest.json", manifest)
+          writej(root / "raw" / dataset_id / "staging-completion.json", manifest)
+          print(json.dumps({"dataset_id": dataset_id, "artifact_count": len(records),
+                            "bytes": sum(item["bytes"] for item in records)}))
+          PY
+          rclone copy --exclude staging-completion.json "$root/raw/$DATASET" "$INPUT_URI/raw/$DATASET"
+          rclone copyto "$root/raw/$DATASET/staging-completion.json" "$INPUT_URI/raw/$DATASET/staging-completion.json"

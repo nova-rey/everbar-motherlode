@@ -101,3 +101,7 @@ The immutable bundle sidecar stores the digest alone. The worker compares that d
 ## 2026-08-22 — Canonical feature-base persistence
 
 Added additive canonical stream, note, bar, source-piece, and source-track tables populated directly from Brick 3 ACCEPT receipts. Accepted item updates now retain their earlier source-family provenance rather than overwriting it. The canonical backfill and `primitive-v1` proof extractor use only persisted SQLite/receipt data, making later feature versions independent from raw MIDI, PerTok decoding, Brick 3, acquisition, and dedupe.
+
+## 2026-08-22 — Immutable Actions input staging
+
+Added a protected manual staging workflow for each registry-approved raw source. It acquires the official payload directly to a disposable runner, emits a source-qualified SHA-256 manifest, uploads private R2 data first, and publishes the staging completion marker last. Processing workers can therefore consume only verified staged inputs and retryable staging remains independent of CPU shard execution.

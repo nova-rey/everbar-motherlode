@@ -35,6 +35,12 @@ The normal deterministic worker interface is `shard --dataset ID --partition-ind
 
 See [distributed GitHub Actions operations](docs/github-actions-distributed-prep.md). The repository never stores raw or generated corpus payloads; Actions secrets provide storage credentials only during manually dispatched, protected write jobs.
 
+The protected **Stage authorized corpus input** workflow acquires one
+registry-approved raw source into private R2 before its processing run. Its
+raw-file hash manifest and `staging-completion.json` marker are written only
+after the payload upload succeeds. This keeps the disposable processing swarm
+independent from this workstation and makes a failed staging attempt retryable.
+
 ## Software versus data
 
 `LICENSE` covers only Motherlode code. Dataset terms and required attribution are recorded in `THIRD_PARTY_DATASETS.md`, machine-readable registry records, and build-specific attribution reports. Public availability does not imply training permission.

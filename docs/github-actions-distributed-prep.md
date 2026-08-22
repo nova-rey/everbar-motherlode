@@ -44,6 +44,15 @@ Create a protected GitHub Environment named `corpus-write`, and add `MOTHERLODE_
 
 The project R2 configuration uses `r2:everbar-motherlode-input` and `r2:everbar-motherlode-output`. They are private buckets; `raw/<dataset-id>/` is staged into the input bucket before a dispatch, and runs are published under the output bucket's `runs/<run-id>/` prefix. The GitHub secret contains the endpoint and S3 access pair only; it is never committed or printed by the workflow.
 
+Use the manual **Stage authorized corpus input** workflow for each approved
+raw source. It downloads the registry-declared payload (and source-qualified
+metadata or the PDMX subset manifest where applicable), writes a SHA-256
+`staging-manifest.json`, uploads payload first, and uploads
+`staging-completion.json` last. The workflow refuses to replace an existing
+completed input package unless its explicit `force` input is selected. A
+processing dispatch must target only an input package with that completion
+marker.
+
 The public workflow restores its exact, private Everbar Brick 3 authority from the immutable `tooling/everbar/<sha>.bundle` object in the input bucket. The bundle checksum and checked-out Git SHA are both verified. This is an explicit pinned integration boundary: Motherlode does not copy or fork Brick 3 semantics, and a run cannot proceed if the authority bundle is unavailable or mismatched.
 
 ## Launch sequence
