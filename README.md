@@ -10,6 +10,15 @@ Everbar Motherlode is a reproducible symbolic-music corpus-construction system f
 
 Everbar remains the semantic authority. This repository invokes the pinned upstream Brick 3 CLI/API; it does not reimplement or modify corpus policy. See `docs/architecture.md` and `configs/sources/registry.json`.
 
+## Canonical corpus and future features
+
+The expensive ingestion pass is not where conditioning measurements belong.
+Every Brick-3-accepted stream persists an analysis-ready canonical event/note
+base plus V2 source-family provenance. Future deterministic feature passes read
+that durable post-Brick-3 view and write versioned derived tables; they do not
+need raw MIDI, PerTok decoding, reacquisition, or another Brick 3 run. See
+[canonical feature base](docs/canonical-feature-base.md).
+
 ## Quick start
 
 ```bash

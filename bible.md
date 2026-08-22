@@ -97,3 +97,7 @@ The configured Brick 3 SHA is present in the trusted local Everbar checkout but 
 ## 2026-08-22 — Authority bundle checksum receipt
 
 The immutable bundle sidecar stores the digest alone. The worker compares that digest directly to the fetched bundle's SHA-256 rather than treating it as a filename-bearing `sha256sum -c` record. The verification remains fail-closed while matching the storage receipt format.
+
+## 2026-08-22 — Canonical feature-base persistence
+
+Added additive canonical stream, note, bar, source-piece, and source-track tables populated directly from Brick 3 ACCEPT receipts. Accepted item updates now retain their earlier source-family provenance rather than overwriting it. The canonical backfill and `primitive-v1` proof extractor use only persisted SQLite/receipt data, making later feature versions independent from raw MIDI, PerTok decoding, Brick 3, acquisition, and dedupe.

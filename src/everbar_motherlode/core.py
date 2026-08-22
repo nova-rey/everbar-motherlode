@@ -4,6 +4,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path, PurePosixPath
 from typing import Any
+from .feature_base import ensure_feature_schema, materialize_canonical_stream
 
 STAGES = ["DISCOVERED","LICENSE_VERIFIED","DOWNLOAD_PENDING","DOWNLOADING","DOWNLOADED","HASH_VERIFIED","EXTRACTED","INDEXED","DERIVED","BRICK3_COMPLETE","FINGERPRINTED","DEDUPE_COMPLETE","OVERLAY_COMPLETE","PROFILE_COMPLETE","DONE"]
 TERMINAL = {"FAILED","RESOURCE_PAUSED","GATED_USER_ACTION_REQUIRED"}
@@ -18,7 +19,7 @@ def config(path: Path) -> dict:
     if os.environ.get("EVERBAR_CHECKOUT"): value["everbar_checkout"]=os.environ["EVERBAR_CHECKOUT"]
     return value
 def db(root: Path):
-    p=root/"state"/"motherlode.sqlite"; p.parent.mkdir(parents=True,exist_ok=True); c=sqlite3.connect(p); c.execute("pragma journal_mode=WAL"); c.execute("create table if not exists datasets(id text primary key, state text, data text, updated real)"); c.execute("create table if not exists items(id text primary key,dataset_id text,state text,source_path text,canonical_hash text,raw_hash text,detail text)"); c.commit(); return c
+    p=root/"state"/"motherlode.sqlite"; p.parent.mkdir(parents=True,exist_ok=True); c=sqlite3.connect(p); c.execute("pragma journal_mode=WAL"); c.execute("create table if not exists datasets(id text primary key, state text, data text, updated real)"); c.execute("create table if not exists items(id text primary key,dataset_id text,state text,source_path text,canonical_hash text,raw_hash text,detail text)"); ensure_feature_schema(c); c.commit(); return c
 def preflight(root:Path,cfg:dict)->dict:
     usage=shutil.disk_usage(root if root.exists() else root.parent); free=usage.free; ok=free>=int(cfg["min_free_bytes"])
     return {"root":str(root),"filesystem_capacity_bytes":usage.total,"disk_free_bytes":free,"reserve_bytes":int(cfg["min_free_bytes"]),"ok":ok,"estimated_raw_bytes":sum(x.get("estimate",0) for x in registry(cfg)),"estimated_extracted_bytes":sum(x.get("estimate",0)*2 for x in registry(cfg)),"estimated_working_bytes":sum(x.get("estimate",0)*3 for x in registry(cfg))}
@@ -247,29 +248,47 @@ def derive(root:Path,c,ds:dict,folder:Path,cfg:dict,partition_index:int=0,partit
         raw=p.read_bytes(); rawid=stable("artifact",ds["id"],sha(raw)); piece=stable("piece",ds["id"],rawid,p.relative_to(folder).as_posix()); result["pieces"]+=1
         try: mid=mido.MidiFile(p)
         except Exception: continue
+        source_timing={"source_tpq":int(mid.ticks_per_beat),"track_end_ticks":[sum(int(message.time) for message in track) for track in mid.tracks]}
+        artifact_id=stable("artifact",ds["id"],sha(raw))
+        track_inventory=[]
         for ti,track in enumerate(mid.tracks):
-            notes=[]; programs=[]; drum=False; name=""
+            notes=[]; programs=[]; channels=[]; drum=False; name=""
             for msg in track:
                 if msg.type=="track_name": name=msg.name
                 if msg.type=="program_change": programs.append(msg.program)
-                if hasattr(msg,"channel") and msg.channel==9: drum=True
+                if hasattr(msg,"channel"):
+                    channels.append(msg.channel)
+                    if msg.channel==9: drum=True
                 if msg.type in {"note_on","note_off"}: notes.append(msg)
             result["tracks"]+=1
             trackid=stable("track",piece,ti,name,programs,drum)
+            inventory={"source_track_id":trackid,"track_index":ti,"source_track_name":name,"programs":programs,"channels":sorted(set(channels)),"is_drum":drum,"has_notes":bool(notes),"source_native_role":None}
+            track_inventory.append(inventory)
+            c.execute("insert or replace into source_tracks values(?,?,?,?,?,?,?,?,?,?)",(trackid,piece,ti,name,json.dumps(programs),json.dumps(sorted(set(channels))),int(drum),int(bool(notes)),None,json.dumps({"track_end_tick":source_timing["track_end_ticks"][ti]})))
+        c.execute("insert or replace into source_pieces values(?,?,?,?,?,?,?,?)",(piece,ds["id"],ds.get("version"),artifact_id,p.relative_to(folder).as_posix(),sha(raw),json.dumps(source_timing,sort_keys=True),json.dumps({"raw_source_preserved":True},sort_keys=True)))
+        for ti,track in enumerate(mid.tracks):
+            inventory=track_inventory[ti]; notes=[]
+            for msg in track:
+                if msg.type in {"note_on","note_off"}: notes.append(msg)
+            trackid=inventory["source_track_id"]; programs=inventory["programs"]; drum=inventory["is_drum"]; name=inventory["source_track_name"]
             if drum or not notes: continue
             cand=stable("v1",trackid,sha(raw)); out=root/"derived"/ds["id"]/(cand+".mid"); out.parent.mkdir(parents=True,exist_ok=True)
             one=mido.MidiFile(type=1,ticks_per_beat=mid.ticks_per_beat); one.tracks.append(track.copy()); one.save(out)
             brick3_input,conversion=convert_for_brick3(root,ds,out,cand)
-            c.execute("insert or replace into items values(?,?,?,?,?,?,?)",(cand,ds["id"],"DERIVED",str(out),None,sha(raw),json.dumps({"source_piece_id":piece,"source_track_id":trackid,"sibling_track_ids":[stable('track',piece,x,'',[],False) for x in range(len(mid.tracks)) if x!=ti],"programs":programs,"is_drum":False,"source_track_name":name,"conversion":conversion})))
+            provenance={"dataset_version":ds.get("version"),"source_piece_id":piece,"source_track_id":trackid,"sibling_track_ids":[entry["source_track_id"] for entry in track_inventory if entry["source_track_id"]!=trackid],"programs":programs,"is_drum":False,"source_track_name":name,"source_native_role":inventory["source_native_role"],"source_timing":source_timing,"source_relative_path":p.relative_to(folder).as_posix(),"source_artifact_id":artifact_id}
+            c.execute("insert or replace into items values(?,?,?,?,?,?,?)",(cand,ds["id"],"DERIVED",str(out),None,sha(raw),json.dumps({"provenance":provenance,"conversion":conversion})))
             result["candidates"]+=1
             # Exact pinned boundary: upstream process owns acceptance semantics.
             cmd=["uv","run","--directory",cfg["everbar_checkout"],"everbar-inspect-midi",str(brick3_input),"--root",str(brick3_input.parent),"--corpus-id",ds["id"]]
             run=subprocess.run(cmd,capture_output=True,text=True,timeout=120)
             if run.returncode==0 and run.stdout.strip():
                 receipt=json.loads(run.stdout.splitlines()[-1]); canonical=receipt.get("canonical_score_sha256") or ((receipt.get("canonical") or {}).get("event_sha256"))
-                c.execute("update items set state=?,canonical_hash=?,detail=? where id=?",("BRICK3_COMPLETE",canonical,json.dumps({"brick3":"ACCEPT","everbar_sha":cfg["everbar_sha"],"conversion":conversion,"receipt":receipt}),cand)); result["accepts"]+=1
+                existing=json.loads(c.execute("select detail from items where id=?",(cand,)).fetchone()[0])
+                final={**existing,"brick3":"ACCEPT","everbar_sha":cfg["everbar_sha"],"conversion":conversion,"receipt":receipt}
+                c.execute("update items set state=?,canonical_hash=?,detail=? where id=?",("BRICK3_COMPLETE",canonical,json.dumps(final),cand)); materialize_canonical_stream(c,stream_id=cand,dataset_id=ds["id"],detail=final); result["accepts"]+=1
             else:
-                c.execute("update items set state=?,detail=? where id=?",("BRICK3_COMPLETE",json.dumps({"brick3":"REJECT","everbar_sha":cfg["everbar_sha"],"conversion":conversion,"diagnostics":run.stderr[-2000:]}),cand)); result["rejects"]+=1
+                existing=json.loads(c.execute("select detail from items where id=?",(cand,)).fetchone()[0])
+                c.execute("update items set state=?,detail=? where id=?",("BRICK3_COMPLETE",json.dumps({**existing,"brick3":"REJECT","everbar_sha":cfg["everbar_sha"],"conversion":conversion,"diagnostics":run.stderr[-2000:]}),cand)); result["rejects"]+=1
     return result
 def progress(root:Path,cfg:dict,state="RUNNING",stage="DISCOVERY"):
     c=db(root); datasets=c.execute("select state,data from datasets").fetchall(); items=c.execute("select state,canonical_hash from items").fetchall(); c.close(); raw=sum(p.stat().st_size for p in (root/"raw").rglob("*") if p.is_file()); starts=(root/"state"/"started"); elapsed=max(1,time.time()-float(starts.read_text())) if starts.exists() else 1

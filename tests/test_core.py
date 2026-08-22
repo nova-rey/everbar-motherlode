@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 from everbar_motherlode.core import config, init, partition_for, preflight, stable, extract, db, derive, performance_flattening_v1, progress, reconcile, shard, writej
 from everbar_motherlode.distributed import output_prefix, publish_shard, shard_label, stage_shard, verify_distributed_run
+from everbar_motherlode.feature_base import backfill_canonical, extract_primitive_features
 
 def cfg(): return config(Path("configs/motherlode-v1.toml"))
 def test_ids_are_machine_and_path_independent():
@@ -62,6 +63,21 @@ def test_single_and_two_shards_have_identical_candidate_coverage(tmp_path, monke
     single_converted={p.name:p.read_bytes() for p in (single/"derived"/"fixture"/"prebrick3").glob("*.mid")}
     sharded_converted={p.name:p.read_bytes() for p in (sharded/"derived"/"fixture"/"prebrick3").glob("*.mid")}
     assert one == two and len(one) == 4 and single_bytes == sharded_bytes and single_converted == sharded_converted
+
+def test_v1_accept_keeps_v2_piece_siblings_and_drum_inventory(tmp_path, monkeypatch):
+    import mido
+    folder=tmp_path/"source"; folder.mkdir(); midi=mido.MidiFile()
+    lead=mido.MidiTrack(); drums=mido.MidiTrack(); midi.tracks.extend([lead,drums])
+    lead.extend([mido.MetaMessage("track_name",name="Lead",time=0),mido.Message("program_change",program=5,time=0),mido.Message("note_on",note=60,velocity=90,time=0),mido.Message("note_off",note=60,velocity=0,time=480)])
+    drums.extend([mido.MetaMessage("track_name",name="Drums",time=0),mido.Message("note_on",channel=9,note=36,velocity=100,time=0),mido.Message("note_off",channel=9,note=36,velocity=0,time=480)])
+    midi.save(folder/"piece.mid")
+    receipt={"receipt_sha256":"r","canonical":{"event_sha256":"c","score":{"schema":"dreamstream-everbar.canonical-score/v1","tpq":480,"track":{"program":0,"is_drum":False,"notes":[[0,480,60,90]]},"tempo":[[0,500000]],"time_signature":[[0,4,4]]}}}
+    monkeypatch.setattr("everbar_motherlode.core.subprocess.run",lambda *args,**kwargs: SimpleNamespace(returncode=0,stdout=json.dumps(receipt),stderr=""))
+    root=tmp_path/"root"; c=db(root); derive(root,c,{"id":"fixture","version":"1","training":"ALLOWED","role":"raw"},folder,{"everbar_sha":"fixture","everbar_checkout":"/fixture"}); c.commit()
+    detail=json.loads(c.execute("select detail from items").fetchone()[0]); siblings=detail["provenance"]["sibling_track_ids"]
+    assert len(siblings) == 1 and c.execute("select is_drum,source_track_name from source_tracks where source_track_id=?",(siblings[0],)).fetchone() == (1,"Drums")
+    assert c.execute("select count(*) from source_pieces").fetchone()[0] == 1
+    c.close()
 def test_registry_and_license_persist(tmp_path):
     init(tmp_path,cfg()); c=db(tmp_path); n=c.execute("select count(*) from datasets").fetchone()[0]; c.close()
     assert n >= 40
@@ -94,6 +110,27 @@ def test_reconcile_uses_everbar_event_identity(tmp_path):
     c.execute("insert into items values(?,?,?,?,?,?,?)",("v1_x","pop909","BRICK3_COMPLETE","x.mid",None,"raw",json.dumps({"receipt":{"canonical":{"event_sha256":"event-hash"}}})))
     c.commit(); c.close(); reconcile(tmp_path,cfg())
     c=db(tmp_path); assert c.execute("select canonical_hash from items where id='v1_x'").fetchone()[0] == "event-hash"; c.close()
+
+def test_canonical_event_backfill_and_features_need_no_midi_or_brick3(tmp_path):
+    root=tmp_path/"root"; c=db(root)
+    receipt={"receipt_sha256":"receipt","policy_id":"corpus-policy-v1","policy_sha256":"policy","language_id":"pertok-v1","language_sha256":"language","canonical":{"event_sha256":"canonical","score":{"schema":"dreamstream-everbar.canonical-score/v1","tpq":480,"track":{"program":0,"is_drum":False,"notes":[[0,2400,60,90],[0,480,60,80],[6000,480,72,100]]},"tempo":[[0,500000]],"time_signature":[[0,4,4]]}}}
+    detail={"brick3":"ACCEPT","everbar_sha":"everbar","receipt":receipt,"provenance":{"dataset_version":"fixture-v1","source_piece_id":"piece","source_track_id":"track","sibling_track_ids":["drums"],"programs":[5],"is_drum":False,"source_track_name":"Lead","source_native_role":"melody","source_timing":{"source_tpq":960}}}
+    c.execute("insert into items values(?,?,?,?,?,?,?)",("stream","fixture","BRICK3_COMPLETE","missing.mid","canonical","raw",json.dumps(detail))); c.commit(); c.close()
+    report=backfill_canonical(root)
+    assert report["materialized_streams"] == 1 and not report["used_raw_midi"] and not report["used_brick3"]
+    c=sqlite3.connect(root/"state"/"motherlode.sqlite")
+    notes=c.execute("select onset_tick,duration_ticks,pitch,velocity,onset_bar_index,end_bar_index from canonical_notes order by note_index").fetchall()
+    assert notes[:2] == [(0,2400,60,90,0,1),(0,480,60,80,0,0)]  # same-pitch overlap + cross-bar duration
+    assert c.execute("select is_empty from canonical_bars where bar_index=2").fetchone()[0] == 1
+    assert c.execute("select source_piece_id,source_track_id,sibling_track_ids_json from canonical_streams").fetchone() == ("piece","track",'["drums"]')
+    c.close()
+    first=extract_primitive_features(root,"primitive-v1")
+    second=extract_primitive_features(root,"primitive-v2")
+    assert first["bar_rows"] == 4 and second["bar_rows"] == 4
+    f=sqlite3.connect(root/"features"/"primitive-v1"/"features.sqlite")
+    assert f.execute("select max_polyphony,round(mean_polyphony,2),round(occupied_fraction,2),round(rest_fraction,2) from bar_features where bar_index=0").fetchone() == (2,1.25,1.0,0.0)
+    assert f.execute("select note_count,onset_count,occupied_fraction,rest_fraction from bar_features where bar_index=2").fetchone() == (0,0,0.0,1.0)
+    f.close()
 def test_performance_flattening_renders_pedals_and_drops_noops():
     import mido
     source=mido.MidiFile(); track=mido.MidiTrack(); source.tracks.append(track)
