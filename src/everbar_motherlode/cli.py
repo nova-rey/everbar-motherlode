@@ -7,6 +7,7 @@ from .feature_base import backfill_canonical, extract_primitive_features
 def main(argv=None):
  p=argparse.ArgumentParser(); sub=p.add_subparsers(dest="cmd",required=True)
  for x in ("preflight","build","status","reconcile","prefetch","monitor","shard","merge-shards","sample-brick3","distributed-shard","verify-distributed-run","backfill-canonical","extract-features"): q=sub.add_parser(x); q.add_argument("--root",type=Path,required=True); q.add_argument("--config",type=Path,default=Path("configs/motherlode-v1.toml")); q.add_argument("--resume",action="store_true"); q.add_argument("--detach",action="store_true")
+ p_snapshot=sub.add_parser("snapshot-preview"); p_snapshot.add_argument("--motherlode-root",type=Path,required=True); p_snapshot.add_argument("--output-root",type=Path,required=True); p_snapshot.add_argument("--everbar-checkout",type=Path,required=True); p_snapshot.add_argument("--motherlode-sha",required=True)
  p_prefetch=sub.choices["prefetch"]; p_prefetch.add_argument("--workers",type=int,default=3)
  p_monitor=sub.choices["monitor"]; p_monitor.add_argument("--interval",type=int,default=300); p_monitor.add_argument("--pid",type=int)
  p_shard=sub.choices["shard"]; p_shard.add_argument("--dataset",action="append",required=True); p_shard.add_argument("--partition-index",type=int,default=0); p_shard.add_argument("--partitions",type=int,default=1)
@@ -14,7 +15,11 @@ def main(argv=None):
  p_distributed=sub.choices["distributed-shard"]; p_distributed.add_argument("--dataset",required=True); p_distributed.add_argument("--shard-index",type=int,required=True); p_distributed.add_argument("--shard-count",type=int,required=True); p_distributed.add_argument("--run-id",required=True); p_distributed.add_argument("--input-uri",default=""); p_distributed.add_argument("--output-uri",required=True); p_distributed.add_argument("--force",action="store_true")
  p_verify=sub.choices["verify-distributed-run"]; p_verify.add_argument("--dataset",required=True); p_verify.add_argument("--shard-count",type=int,required=True); p_verify.add_argument("--run-id",required=True); p_verify.add_argument("--output-uri",required=True)
  p_features=sub.choices["extract-features"]; p_features.add_argument("--extractor-id",default="primitive-v1")
- a=p.parse_args(argv); cfg=config(a.config)
+ a=p.parse_args(argv)
+ if a.cmd=="snapshot-preview":
+  from .snapshot import build
+  print(__import__('json').dumps(build(motherlode_root=a.motherlode_root,output_root=a.output_root,everbar_checkout=a.everbar_checkout,motherlode_sha=a.motherlode_sha),indent=2)); return 0
+ cfg=config(a.config)
  if a.cmd=="preflight": print(__import__('json').dumps(preflight(a.root,cfg),indent=2)); return 0
  if a.cmd=="status": print(__import__('json').dumps(progress(a.root,cfg),indent=2)); return 0
  if a.cmd=="reconcile":

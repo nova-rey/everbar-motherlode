@@ -162,6 +162,15 @@ The deployed user service pins the local Codex CLI directory in its execution PA
 
 The remote probe passes the configured corpus root explicitly into the SSH command, so receipt and PID checks execute against the intended persistent root rather than inheriting an absent remote shell variable.
 
+## 2026-08-22 — Immutable EV1 preview snapshot seam
+
+Added a read-only snapshot builder for completed clean PDMX partitions plus
+completed POP909 receipts. It freezes exact canonical membership, preserves
+all collapsed provenance edges, uses source-family-safe splits, materializes
+canonical notes/bars without raw MIDI or Brick 3, and writes the existing
+Brick 8 packed-view contract. The live Motherlode queue is not a dependency or
+write target of this operation.
+
 ## 2026-08-22 — POP909 fast-lane proof-of-concept builder
 
 Added an isolated POP909-only preparation path that reuses the verified
