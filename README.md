@@ -20,6 +20,12 @@ uv run everbar-motherlode status --root /path/to/motherlode-root
 
 The runner is resumable and only schedules sources whose license lane is eligible. Sources requiring click-through terms, credentials, or unresolved training rights are written to `progress/user-actions.*` and never bypassed.
 
+## Disposable-worker / GitHub Actions shards
+
+The normal deterministic worker interface is `shard --dataset ID --partition-index I --partitions N`. Ownership is SHA-256 of the dataset ID and source-relative path, so `N` shards have no overlap and do not depend on scheduling order or randomness. `distributed-shard` wraps that same command for disposable machines: it fetches immutable input from a caller-selected `file://` or `rclone` URI, stages a run-scoped package, and publishes `completion.json` last.
+
+See [distributed GitHub Actions operations](docs/github-actions-distributed-prep.md). The repository never stores raw or generated corpus payloads; Actions secrets provide storage credentials only during manually dispatched, protected write jobs.
+
 ## Software versus data
 
 `LICENSE` covers only Motherlode code. Dataset terms and required attribution are recorded in `THIRD_PARTY_DATASETS.md`, machine-readable registry records, and build-specific attribution reports. Public availability does not imply training permission.

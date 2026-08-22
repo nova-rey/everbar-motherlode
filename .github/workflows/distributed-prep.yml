@@ -1,0 +1,153 @@
+name: Distributed corpus preparation
+
+on:
+  workflow_dispatch:
+    inputs:
+      dataset:
+        description: Registry dataset ID to process
+        required: true
+        default: pdmx
+        type: choice
+        options: [pdmx, gigamidi, maestro, asap, aria-midi]
+      shard_count:
+        description: Deterministic shard count (start with 2 or 4)
+        required: true
+        default: "2"
+        type: choice
+        options: ["1", "2", "4", "8", "12", "16", "20"]
+      run_id:
+        description: Immutable output run ID (for example 20260822-pdmx-smoke)
+        required: true
+        type: string
+      input_uri:
+        description: rclone URI or file URI containing raw/<dataset>/ payloads
+        required: true
+        type: string
+      output_uri:
+        description: rclone URI or file URI for immutable runs/<run-id>/ outputs
+        required: true
+        type: string
+      force:
+        description: Permit replacing an existing completed shard package
+        required: true
+        default: false
+        type: boolean
+
+# No pull_request trigger: write credentials are only exposed to an explicit,
+# protected manual dispatch in the repository, never to fork code.
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - id: matrix
+        env:
+          SHARD_COUNT: ${{ inputs.shard_count }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          count = int(os.environ["SHARD_COUNT"])
+          if count not in {1, 2, 4, 8, 12, 16, 20}:
+              raise SystemExit("unsupported shard count")
+          print("matrix=" + json.dumps({"shard": list(range(count))}))
+          PY
+
+  prep:
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: corpus-write
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      MOTHERLODE_INPUT_URI: ${{ inputs.input_uri }}
+      MOTHERLODE_OUTPUT_URI: ${{ inputs.output_uri }}
+      # Base64 avoids multiline-secret handling; no command prints this value.
+      MOTHERLODE_RCLONE_CONFIG_B64: ${{ secrets.MOTHERLODE_RCLONE_CONFIG_B64 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install CPU-only preparation dependencies
+        run: uv sync --frozen --extra test
+
+      - name: Install rclone only when an object-storage URI is used
+        if: ${{ !startsWith(inputs.input_uri, 'file://') || !startsWith(inputs.output_uri, 'file://') }}
+        run: sudo apt-get update && sudo apt-get install --yes rclone
+
+      - name: Configure private storage credentials
+        if: ${{ !startsWith(inputs.input_uri, 'file://') || !startsWith(inputs.output_uri, 'file://') }}
+        run: |
+          test -n "$MOTHERLODE_RCLONE_CONFIG_B64"
+          install -d -m 700 "$RUNNER_TEMP/rclone"
+          printf '%s' "$MOTHERLODE_RCLONE_CONFIG_B64" | base64 --decode > "$RUNNER_TEMP/rclone/rclone.conf"
+          chmod 600 "$RUNNER_TEMP/rclone/rclone.conf"
+          echo "RCLONE_CONFIG=$RUNNER_TEMP/rclone/rclone.conf" >> "$GITHUB_ENV"
+
+      - name: Prepare and publish one deterministic shard
+        env:
+          DATASET: ${{ inputs.dataset }}
+          SHARD_INDEX: ${{ matrix.shard }}
+          SHARD_COUNT: ${{ inputs.shard_count }}
+          RUN_ID: ${{ inputs.run_id }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          root="$RUNNER_TEMP/motherlode"
+          args=(distributed-shard --root "$root" --config configs/motherlode-v1.toml
+                --dataset "$DATASET" --shard-index "$SHARD_INDEX" --shard-count "$SHARD_COUNT"
+                --run-id "$RUN_ID" --input-uri "$MOTHERLODE_INPUT_URI" --output-uri "$MOTHERLODE_OUTPUT_URI")
+          if [ "$FORCE" = "true" ]; then args+=(--force); fi
+          uv run everbar-motherlode "${args[@]}" | tee "$RUNNER_TEMP/shard-result.json"
+
+      - name: Emit job summary
+        if: always()
+        env:
+          SHARD_INDEX: ${{ matrix.shard }}
+          SHARD_COUNT: ${{ inputs.shard_count }}
+        run: |
+          {
+            echo "## Motherlode shard"
+            echo
+            echo "- Run: \`${{ inputs.run_id }}\`"
+            echo "- Dataset: \`${{ inputs.dataset }}\`"
+            echo "- Shard: \`$SHARD_INDEX/$SHARD_COUNT\`"
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            test -f "$RUNNER_TEMP/shard-result.json" && echo '```json' && cat "$RUNNER_TEMP/shard-result.json" && echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  verify:
+    needs: prep
+    runs-on: ubuntu-latest
+    environment: corpus-write
+    env:
+      MOTHERLODE_RCLONE_CONFIG_B64: ${{ secrets.MOTHERLODE_RCLONE_CONFIG_B64 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --frozen
+      - name: Install and configure rclone
+        if: ${{ !startsWith(inputs.output_uri, 'file://') }}
+        run: |
+          sudo apt-get update && sudo apt-get install --yes rclone
+          test -n "$MOTHERLODE_RCLONE_CONFIG_B64"
+          install -d -m 700 "$RUNNER_TEMP/rclone"
+          printf '%s' "$MOTHERLODE_RCLONE_CONFIG_B64" | base64 --decode > "$RUNNER_TEMP/rclone/rclone.conf"
+          chmod 600 "$RUNNER_TEMP/rclone/rclone.conf"
+          echo "RCLONE_CONFIG=$RUNNER_TEMP/rclone/rclone.conf" >> "$GITHUB_ENV"
+      - name: Verify completion, coverage, and no duplicate item IDs
+        run: |
+          uv run everbar-motherlode verify-distributed-run --root "$RUNNER_TEMP/verify" \
+            --dataset "${{ inputs.dataset }}" --shard-count "${{ inputs.shard_count }}" \
+            --run-id "${{ inputs.run_id }}" --output-uri "${{ inputs.output_uri }}"

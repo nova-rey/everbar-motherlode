@@ -1,7 +1,9 @@
 import io, json, sqlite3, tarfile, zipfile
 from pathlib import Path
+from types import SimpleNamespace
 import pytest
-from everbar_motherlode.core import config, init, partition_for, preflight, stable, extract, db, performance_flattening_v1, progress, reconcile
+from everbar_motherlode.core import config, init, partition_for, preflight, stable, extract, db, derive, performance_flattening_v1, progress, reconcile, writej
+from everbar_motherlode.distributed import output_prefix, publish_shard, shard_label, stage_shard, verify_distributed_run
 
 def cfg(): return config(Path("configs/motherlode-v1.toml"))
 def test_ids_are_machine_and_path_independent():
@@ -12,6 +14,42 @@ def test_partition_assignment_is_stable_and_complete():
     assignments=[partition_for("pdmx",path,3) for path in paths]
     assert assignments == [partition_for("pdmx",path,3) for path in paths]
     assert set(assignments) == {0,1,2}
+def test_distributed_stage_is_run_scoped_and_retry_safe(tmp_path):
+    c=cfg(); root=tmp_path/"root"; label=shard_label("pop909",1,2); shard_root=root/"state"/"shards"/label/"state"; shard_root.mkdir(parents=True)
+    candidate=root/"derived"/"pop909"/"v1_x.mid"; candidate.parent.mkdir(parents=True); candidate.write_bytes(b"candidate")
+    converted=root/"derived"/"pop909"/"prebrick3"/"v1_x.mid"; converted.parent.mkdir(parents=True); converted.write_bytes(b"converted")
+    receipt=root/"receipts"/"conversion"/"v1_x.json"; writej(receipt,{"ok":True})
+    d=db(root/"state"/"shards"/label); d.execute("insert into items values(?,?,?,?,?,?,?)",("v1_x","pop909","BRICK3_COMPLETE",str(candidate),"canonical","raw",json.dumps({"conversion":{"output_path":str(converted)}}))); d.commit(); d.close()
+    writej(root/"progress"/"shards"/(label+".json"),{"state":"COMPLETE","dataset_id":"pop909","result":{"candidates":1}})
+    stage,manifest=stage_shard(root,c,"pop909",1,2,"run-a",{"state":"COMPLETE"})
+    assert manifest["item_count"] == 1 and (stage/"completion.json").exists()
+    destination=tmp_path/"persistent"; published=publish_shard(stage,"file://"+str(destination),manifest)
+    assert Path(published,"completion.json").exists() and output_prefix("run-a","pop909",1,2) in published
+    with pytest.raises(FileExistsError): publish_shard(stage,"file://"+str(destination),manifest)
+    incomplete=verify_distributed_run("file://"+str(destination),"run-a","pop909",2)
+    assert incomplete["state"] == "INCOMPLETE" and incomplete["completed_shard_ids"] == [1]
+    complete_root=tmp_path/"complete"/"runs"/"run-b"/"pop909"
+    for index in (0,1):
+        package=complete_root/f"shard-{index:05d}-of-00002"; writej(package/"completion.json",{"state":"COMPLETE","shard_index":index,"shard_count":2}); writej(package/"item-ids.json",{"item_ids":[f"v1_{index}"]})
+    assert verify_distributed_run("file://"+str(tmp_path/"complete"),"run-b","pop909",2)["state"] == "COMPLETE"
+def test_single_and_two_shards_have_identical_candidate_coverage(tmp_path, monkeypatch):
+    import mido
+    folder=tmp_path/"source"; folder.mkdir()
+    for index,note in enumerate((60,64,67,72)):
+        midi=mido.MidiFile(); track=mido.MidiTrack(); midi.tracks.append(track)
+        track.extend([mido.Message("program_change",program=0,time=0),mido.Message("note_on",note=note,velocity=80,time=0),mido.Message("note_off",note=note,velocity=0,time=120)])
+        midi.save(folder/f"piece-{index}.mid")
+    monkeypatch.setattr("everbar_motherlode.core.subprocess.run",lambda *args,**kwargs: SimpleNamespace(returncode=0,stdout=json.dumps({"canonical":{"event_sha256":"fixture"}}),stderr=""))
+    source={"id":"fixture","training":"ALLOWED","role":"raw"}; runtime_cfg={"everbar_sha":"fixture","everbar_checkout":"/fixture"}
+    single=tmp_path/"single"; c=db(single); derive(single,c,source,folder,runtime_cfg); c.commit(); one={r[0] for r in c.execute("select id from items")}; c.close()
+    sharded=tmp_path/"sharded"; two=set()
+    for index in (0,1):
+        c=db(sharded/"state"/"shards"/str(index)); derive(sharded,c,source,folder,runtime_cfg,index,2); c.commit(); two.update(r[0] for r in c.execute("select id from items")); c.close()
+    single_bytes={p.name:p.read_bytes() for p in (single/"derived"/"fixture").glob("*.mid")}
+    sharded_bytes={p.name:p.read_bytes() for p in (sharded/"derived"/"fixture").glob("*.mid")}
+    single_converted={p.name:p.read_bytes() for p in (single/"derived"/"fixture"/"prebrick3").glob("*.mid")}
+    sharded_converted={p.name:p.read_bytes() for p in (sharded/"derived"/"fixture"/"prebrick3").glob("*.mid")}
+    assert one == two and len(one) == 4 and single_bytes == sharded_bytes and single_converted == sharded_converted
 def test_registry_and_license_persist(tmp_path):
     init(tmp_path,cfg()); c=db(tmp_path); n=c.execute("select count(*) from datasets").fetchone()[0]; c.close()
     assert n >= 40

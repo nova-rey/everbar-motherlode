@@ -72,6 +72,10 @@ Added hash-stable source-path partitioning for independent shard workers. It per
 
 Added a source-specific, lock-serialized safe extraction step for GigaMIDI's documented outer and nested split ZIPs. Each nested archive receives an atomic expansion marker only after completion, so interrupted preparation resumes and partition workers never treat the outer ZIP bytes as corpus MIDI files.
 
+## 2026-08-22 — Disposable distributed shard boundary
+
+Added a run-scoped shard package around the existing hash-stable corpus partition primitive. A completed shard exports only its own SQLite state, derived candidate/converted MIDI, and conversion receipts, then publishes an immutable completion marker last. This supports independent disposable workers and retrying only failed shards without changing corpus-policy semantics.
+
 ## 2026-08-21 — Brick 3 semantic-review handoff
 
 Added a development-thread brief separating the invalid remote-path receipts from genuine MAESTRO pedal-controller and ASAP sustain/zero-duration-note findings. The brief records sample evidence and decision options while preserving the rule that Motherlode must not alter Brick 3 policy or silently repair source semantics.
