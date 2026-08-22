@@ -64,6 +64,10 @@ Extended `performance-flattening-v1` to consume channel-local CC121 Reset All Co
 
 A deterministic 64-stream-per-dataset remote audit yielded 64/64 MAESTRO accepts and 46/64 ASAP accepts. CC121 eliminated remaining semantic-control rejections in both samples. Unsupported meter affected 8/64 ASAP and 0/64 MAESTRO samples; no meter or PerTok change was made.
 
+## 2026-08-22 — Deterministic source partitioning
+
+Added hash-stable source-path partitioning for independent shard workers. It permits PDMX to use multiple non-overlapping CPU workers while preserving source IDs, candidate IDs, conversion policy, Brick 3 authority, and deterministic merge behavior.
+
 ## 2026-08-21 — Brick 3 semantic-review handoff
 
 Added a development-thread brief separating the invalid remote-path receipts from genuine MAESTRO pedal-controller and ASAP sustain/zero-duration-note findings. The brief records sample evidence and decision options while preserving the rule that Motherlode must not alter Brick 3 policy or silently repair source semantics.

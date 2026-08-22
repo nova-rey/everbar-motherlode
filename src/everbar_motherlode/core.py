@@ -86,6 +86,9 @@ def extract(root:Path,s:dict,artifact:Path)->Path:
     else: shutil.copy2(artifact,out/artifact.name)
     marker.write_text(sha(artifact.read_bytes())+"\n"); return out
 def midi_files(folder:Path): return sorted(p for p in folder.rglob("*") if p.suffix.lower() in {".mid",".midi"})
+def partition_for(dataset_id:str,relative_path:str,partitions:int)->int:
+    if partitions < 1: raise ValueError("partitions must be positive")
+    return int(sha(dataset_id+"\0"+relative_path)[:16],16)%partitions
 PERFORMANCE_FLATTENING_POLICY="performance-flattening-v1"
 def performance_flattening_v1(mid):
     """Render V1-supported pedal semantics without changing original MIDI bytes.
@@ -209,12 +212,14 @@ def _pdmx_allowed_midi_paths(root: Path, ds: dict) -> set[str]:
         if path.parts and path.parts[0] == "data": path=PurePosixPath("mid",*path.parts[1:])
         allowed.add(path.with_suffix(".mid").as_posix())
     return allowed
-def derive(root:Path,c,ds:dict,folder:Path,cfg:dict):
+def derive(root:Path,c,ds:dict,folder:Path,cfg:dict,partition_index:int=0,partitions:int=1):
     import mido
     result={"pieces":0,"tracks":0,"candidates":0,"accepts":0,"rejects":0}
     allowed=_pdmx_allowed_midi_paths(root,ds) if ds["id"] == "pdmx" else None
     for p in midi_files(folder):
-        if allowed is not None and p.relative_to(folder).as_posix() not in allowed: continue
+        relative=p.relative_to(folder).as_posix()
+        if allowed is not None and relative not in allowed: continue
+        if partition_for(ds["id"],relative,partitions) != partition_index: continue
         raw=p.read_bytes(); rawid=stable("artifact",ds["id"],sha(raw)); piece=stable("piece",ds["id"],rawid,p.relative_to(folder).as_posix()); result["pieces"]+=1
         try: mid=mido.MidiFile(p)
         except Exception: continue
@@ -267,22 +272,24 @@ def monitor(root:Path,cfg:dict,interval:int=300,pid:int|None=None):
             except ProcessLookupError: break
         time.sleep(max(5,interval))
     return progress(root,cfg,"PARTIAL","MONITOR_COMPLETE")
-def shard(root:Path,cfg:dict,dataset_ids:list[str]):
+def shard(root:Path,cfg:dict,dataset_ids:list[str],partition_index:int=0,partitions:int=1):
     """Run non-overlapping source datasets in parallel without central DB locks."""
     sources={s["id"]:s for s in registry(cfg)}; results=[]
+    if not 0 <= partition_index < partitions: raise ValueError("partition index is outside partition count")
     for dataset_id in dataset_ids:
         ds=sources.get(dataset_id)
         if not ds: raise ValueError(f"unknown dataset: {dataset_id}")
         if ds["training"] != "ALLOWED" or ds["role"] != "raw": raise ValueError(f"not eligible for shard: {dataset_id}")
         artifact=root/"raw"/dataset_id/(dataset_id+".download")
         if not artifact.exists(): raise FileNotFoundError(f"download is not ready: {dataset_id}")
-        if dataset_id == "pdmx": (root/"state"/"started").write_text(str(time.time()))
+        if dataset_id == "pdmx" and partition_index == 0: (root/"state"/"started").write_text(str(time.time()))
         folder=extract(root,ds,artifact)
-        shard_root=root/"state"/"shards"/dataset_id; shard_root.mkdir(parents=True,exist_ok=True)
+        label=dataset_id if partitions == 1 else f"{dataset_id}-part-{partition_index}-of-{partitions}"
+        shard_root=root/"state"/"shards"/label; shard_root.mkdir(parents=True,exist_ok=True)
         c=db(shard_root)
-        result=derive(root,c,ds,folder,cfg); c.commit(); c.close()
-        receipt={"state":"COMPLETE","dataset_id":dataset_id,"result":result,"shard_db":str(shard_root/"state"/"motherlode.sqlite"),"finished_at":time.time()}
-        writej(root/"progress"/"shards"/(dataset_id+".json"),receipt); results.append(receipt)
+        result=derive(root,c,ds,folder,cfg,partition_index,partitions); c.commit(); c.close()
+        receipt={"state":"COMPLETE","dataset_id":dataset_id,"partition_index":partition_index,"partitions":partitions,"result":result,"shard_db":str(shard_root/"state"/"motherlode.sqlite"),"finished_at":time.time()}
+        writej(root/"progress"/"shards"/(label+".json"),receipt); results.append(receipt)
     return {"state":"COMPLETE","results":results}
 def merge_shards(root:Path,cfg:dict):
     """Merge completed isolated worker receipts after the central writer is idle."""

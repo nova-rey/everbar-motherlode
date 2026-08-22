@@ -1,12 +1,17 @@
 import io, json, sqlite3, tarfile, zipfile
 from pathlib import Path
 import pytest
-from everbar_motherlode.core import config, init, preflight, stable, extract, db, performance_flattening_v1, progress, reconcile
+from everbar_motherlode.core import config, init, partition_for, preflight, stable, extract, db, performance_flattening_v1, progress, reconcile
 
 def cfg(): return config(Path("configs/motherlode-v1.toml"))
 def test_ids_are_machine_and_path_independent():
     assert stable("piece","x","bytes","inside.mid") == stable("piece","x","bytes","inside.mid")
     assert stable("piece","x","bytes","inside.mid") != stable("piece","x","bytes","else.mid")
+def test_partition_assignment_is_stable_and_complete():
+    paths=[f"piece/{i}.mid" for i in range(100)]
+    assignments=[partition_for("pdmx",path,3) for path in paths]
+    assert assignments == [partition_for("pdmx",path,3) for path in paths]
+    assert set(assignments) == {0,1,2}
 def test_registry_and_license_persist(tmp_path):
     init(tmp_path,cfg()); c=db(tmp_path); n=c.execute("select count(*) from datasets").fetchone()[0]; c.close()
     assert n >= 40
