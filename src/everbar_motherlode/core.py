@@ -308,7 +308,10 @@ def shard(root:Path,cfg:dict,dataset_ids:list[str],partition_index:int=0,partiti
         if not artifact.exists(): raise FileNotFoundError(f"download is not ready: {dataset_id}")
         if dataset_id == "pdmx" and partition_index == 0: (root/"state"/"started").write_text(str(time.time()))
         folder=extract(root,ds,artifact)
-        label=dataset_id if partitions == 1 else f"{dataset_id}-part-{partition_index}-of-{partitions}"
+        # This label is a durable handoff boundary consumed by
+        # ``distributed.stage_shard``.  Keep its fixed-width form identical to
+        # the run-package name so a completed worker state is publishable.
+        label=dataset_id if partitions == 1 else f"{dataset_id}-part-{partition_index:05d}-of-{partitions:05d}"
         shard_root=root/"state"/"shards"/label; shard_root.mkdir(parents=True,exist_ok=True)
         c=db(shard_root)
         result=derive(root,c,ds,folder,cfg,partition_index,partitions); c.commit(); c.close()

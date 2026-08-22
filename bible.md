@@ -85,3 +85,7 @@ Added a development-thread brief separating the invalid remote-path receipts fro
 ## 2026-08-22 — Cloudflare R2 persistent storage handoff
 
 Provisioned private `everbar-motherlode-input` and `everbar-motherlode-output` R2 buckets and a protected `corpus-write` GitHub Environment secret containing the rclone configuration. The credential was verified with an S3-compatible bucket listing and is never represented in repository files, logs, or workflow output. Distributed-preparation documentation now uses the provisioned rclone URIs.
+
+## 2026-08-22 — Distributed smoke hardening
+
+Corrected the partition-state label so the deterministic worker and distributed publisher use the same fixed-width durable path. The workflow now uses `pipefail`, checks out the exact private Everbar authority through a protected read-only deploy key, and verifies the upstream SHA before any Brick 3 invocation. A real smoke run can no longer report a worker failure as a successful preparation job.

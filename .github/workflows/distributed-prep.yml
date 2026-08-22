@@ -67,10 +67,26 @@ jobs:
     env:
       MOTHERLODE_INPUT_URI: ${{ inputs.input_uri }}
       MOTHERLODE_OUTPUT_URI: ${{ inputs.output_uri }}
+      EVERBAR_CHECKOUT: ${{ github.workspace }}/.everbar-upstream
       # Base64 avoids multiline-secret handling; no command prints this value.
       MOTHERLODE_RCLONE_CONFIG_B64: ${{ secrets.MOTHERLODE_RCLONE_CONFIG_B64 }}
     steps:
       - uses: actions/checkout@v4
+
+      # Brick 3 remains the pinned upstream authority.  This repository is
+      # public, so the protected Environment supplies a read-only deploy key
+      # scoped to the separate private Everbar repository.
+      - name: Check out pinned Everbar corpus authority
+        uses: actions/checkout@v4
+        with:
+          repository: nova-rey/dreamstream-everbar
+          ref: 8876a0c0e4da91b32dd0542f543d97f2736e24c1
+          path: .everbar-upstream
+          ssh-key: ${{ secrets.EVERBAR_READ_DEPLOY_KEY }}
+          persist-credentials: false
+
+      - name: Verify pinned Everbar checkout
+        run: test "$(git -C "$EVERBAR_CHECKOUT" rev-parse HEAD)" = 8876a0c0e4da91b32dd0542f543d97f2736e24c1
 
       - uses: astral-sh/setup-uv@v5
         with:
@@ -101,6 +117,7 @@ jobs:
           RUN_ID: ${{ inputs.run_id }}
           FORCE: ${{ inputs.force }}
         run: |
+          set -o pipefail
           root="$RUNNER_TEMP/motherlode"
           args=(distributed-shard --root "$root" --config configs/motherlode-v1.toml
                 --dataset "$DATASET" --shard-index "$SHARD_INDEX" --shard-count "$SHARD_COUNT"

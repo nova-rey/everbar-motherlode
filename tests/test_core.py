@@ -2,7 +2,7 @@ import io, json, sqlite3, tarfile, zipfile
 from pathlib import Path
 from types import SimpleNamespace
 import pytest
-from everbar_motherlode.core import config, init, partition_for, preflight, stable, extract, db, derive, performance_flattening_v1, progress, reconcile, writej
+from everbar_motherlode.core import config, init, partition_for, preflight, stable, extract, db, derive, performance_flattening_v1, progress, reconcile, shard, writej
 from everbar_motherlode.distributed import output_prefix, publish_shard, shard_label, stage_shard, verify_distributed_run
 
 def cfg(): return config(Path("configs/motherlode-v1.toml"))
@@ -32,6 +32,18 @@ def test_distributed_stage_is_run_scoped_and_retry_safe(tmp_path):
     for index in (0,1):
         package=complete_root/f"shard-{index:05d}-of-00002"; writej(package/"completion.json",{"state":"COMPLETE","shard_index":index,"shard_count":2}); writej(package/"item-ids.json",{"item_ids":[f"v1_{index}"]})
     assert verify_distributed_run("file://"+str(tmp_path/"complete"),"run-b","pop909",2)["state"] == "COMPLETE"
+
+def test_partition_worker_uses_distributed_publish_label(tmp_path, monkeypatch):
+    root=tmp_path/"root"; (root/"raw"/"fixture").mkdir(parents=True)
+    (root/"raw"/"fixture"/"fixture.download").write_bytes(b"archive")
+    source={"id":"fixture","training":"ALLOWED","role":"raw"}
+    monkeypatch.setattr("everbar_motherlode.core.registry",lambda cfg:[source])
+    monkeypatch.setattr("everbar_motherlode.core.extract",lambda *args:tmp_path)
+    monkeypatch.setattr("everbar_motherlode.core.derive",lambda *args,**kwargs:{"pieces":0,"tracks":0,"candidates":0,"accepts":0,"rejects":0})
+    shard(root,{"registry":"ignored"},["fixture"],1,2)
+    label=shard_label("fixture",1,2)
+    assert (root/"state"/"shards"/label/"state"/"motherlode.sqlite").exists()
+    assert (root/"progress"/"shards"/(label+".json")).exists()
 def test_single_and_two_shards_have_identical_candidate_coverage(tmp_path, monkeypatch):
     import mido
     folder=tmp_path/"source"; folder.mkdir()
