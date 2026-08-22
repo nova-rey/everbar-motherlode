@@ -67,3 +67,8 @@ The converted ASAP sample exposes separate CC121 and unsupported-meter
 rejections. Any treatment of those conditions needs its own reviewed policy;
 Motherlode continues to preserve the source, conversion receipt, and Brick 3
 diagnostics without admitting rejected candidates into a training lane.
+
+The subsequent CC121-aware 64-stream audit removed semantic-control rejection
+from both sampled datasets. Unsupported meter remained in 8/64 ASAP streams
+(12.5%) and 0/64 MAESTRO streams. This is meaningful measured corpus loss for
+ASAP, but this review makes no meter or PerTok policy change.

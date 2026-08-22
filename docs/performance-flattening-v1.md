@@ -39,6 +39,18 @@ derived conversion, never an original source file.
 The original MAESTRO sample rejected for CC64/CC66/CC67 was accepted after
 conversion with no controller or invalid-note reason codes. The original ASAP
 sample no longer produced `REJECT_INVALID_NOTE` after its zero-duration no-op
-was removed. Its converted sample still produced unrelated
-`REJECT_SEMANTIC_CONTROL_CHANGE` for CC121 and `REJECT_UNSUPPORTED_METER`; this
-policy does not alter those events.
+was removed. CC121 is now consumed by this policy; unsupported meter and other
+non-covered event classes remain Brick 3 evidence.
+
+After CC121 consumption was added, a deterministic 64-stream-per-dataset audit
+against the pinned Lightning Everbar authority reported:
+
+| Dataset | Accepted | Rejected | Accept rate | Unsupported-meter rate | Semantic-control rate |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| MAESTRO | 64 | 0 | 100.0% | 0.0% | 0.0% |
+| ASAP | 46 | 18 | 71.875% | 12.5% | 0.0% |
+
+ASAP's remaining sample-level rejection classes were aftertouch (8 streams),
+SysEx (6), tempo change (5), unsupported timing event (3), meter change (2),
+and tempo out of range (1). These counts are overlapping stream classes, not
+a mandate to normalize any of them.
