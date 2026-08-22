@@ -237,19 +237,54 @@ def _pdmx_allowed_midi_paths(root: Path, ds: dict) -> set[str]:
         if path.parts and path.parts[0] == "data": path=PurePosixPath("mid",*path.parts[1:])
         allowed.add(path.with_suffix(".mid").as_posix())
     return allowed
+
+def _pdmx_partition_files(root: Path, ds: dict, folder: Path, partitions: int, partition_index: int) -> list[Path]:
+    """Return one durable, deterministic PDMX work list.
+
+    The official allow-list and extracted tree are immutable inputs. Building
+    their complete partition map once avoids a full tree walk and allow-list
+    reconstruction in every worker while retaining ``partition_for`` as the
+    ownership authority. The completion marker is published last under a file
+    lock, so interrupted construction is safely rebuilt on resume.
+    """
+    if partitions < 1 or not 0 <= partition_index < partitions:
+        raise ValueError("partition index is outside partition count")
+    base = root / "state" / "manifests" / f"pdmx-partitions-{partitions:05d}"
+    marker = base / "complete.json"
+    lock_path = base.with_suffix(".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if not marker.exists():
+            allowed = _pdmx_allowed_midi_paths(root, ds)
+            grouped = [[] for _ in range(partitions)]
+            for path in midi_files(folder):
+                relative = path.relative_to(folder).as_posix()
+                if relative in allowed:
+                    grouped[partition_for(ds["id"], relative, partitions)].append(relative)
+            base.mkdir(parents=True, exist_ok=True)
+            for index, paths in enumerate(grouped):
+                writej(base / f"part-{index:05d}.json", {"dataset_id": ds["id"], "partitions": partitions,
+                                                            "partition_index": index, "paths": paths})
+            writej(marker, {"state": "COMPLETE", "dataset_id": ds["id"], "partitions": partitions,
+                            "eligible_path_count": sum(len(paths) for paths in grouped),
+                            "partition_counts": [len(paths) for paths in grouped]})
+        entry = json.loads((base / f"part-{partition_index:05d}.json").read_text())
+    if entry.get("dataset_id") != ds["id"] or entry.get("partitions") != partitions or entry.get("partition_index") != partition_index:
+        raise ValueError("invalid PDMX partition manifest")
+    return [folder / relative for relative in entry["paths"]]
 def derive(root:Path,c,ds:dict,folder:Path,cfg:dict,partition_index:int=0,partitions:int=1):
     import mido
     result={"pieces":0,"tracks":0,"candidates":0,"accepts":0,"rejects":0}
-    allowed=_pdmx_allowed_midi_paths(root,ds) if ds["id"] == "pdmx" else None
-    for p in midi_files(folder):
+    files = _pdmx_partition_files(root, ds, folder, partitions, partition_index) if ds["id"] == "pdmx" else midi_files(folder)
+    for p in files:
         relative=p.relative_to(folder).as_posix()
-        if allowed is not None and relative not in allowed: continue
-        if partition_for(ds["id"],relative,partitions) != partition_index: continue
-        raw=p.read_bytes(); rawid=stable("artifact",ds["id"],sha(raw)); piece=stable("piece",ds["id"],rawid,p.relative_to(folder).as_posix()); result["pieces"]+=1
+        if ds["id"] != "pdmx" and partition_for(ds["id"],relative,partitions) != partition_index: continue
+        raw=p.read_bytes(); raw_hash=sha(raw); rawid=stable("artifact",ds["id"],raw_hash); piece=stable("piece",ds["id"],rawid,relative); result["pieces"]+=1
         try: mid=mido.MidiFile(p)
         except Exception: continue
         source_timing={"source_tpq":int(mid.ticks_per_beat),"track_end_ticks":[sum(int(message.time) for message in track) for track in mid.tracks]}
-        artifact_id=stable("artifact",ds["id"],sha(raw))
+        artifact_id=stable("artifact",ds["id"],raw_hash)
         track_inventory=[]
         for ti,track in enumerate(mid.tracks):
             notes=[]; programs=[]; channels=[]; drum=False; name=""
@@ -265,18 +300,16 @@ def derive(root:Path,c,ds:dict,folder:Path,cfg:dict,partition_index:int=0,partit
             inventory={"source_track_id":trackid,"track_index":ti,"source_track_name":name,"programs":programs,"channels":sorted(set(channels)),"is_drum":drum,"has_notes":bool(notes),"source_native_role":None}
             track_inventory.append(inventory)
             c.execute("insert or replace into source_tracks values(?,?,?,?,?,?,?,?,?,?)",(trackid,piece,ti,name,json.dumps(programs),json.dumps(sorted(set(channels))),int(drum),int(bool(notes)),None,json.dumps({"track_end_tick":source_timing["track_end_ticks"][ti]})))
-        c.execute("insert or replace into source_pieces values(?,?,?,?,?,?,?,?)",(piece,ds["id"],ds.get("version"),artifact_id,p.relative_to(folder).as_posix(),sha(raw),json.dumps(source_timing,sort_keys=True),json.dumps({"raw_source_preserved":True},sort_keys=True)))
+        c.execute("insert or replace into source_pieces values(?,?,?,?,?,?,?,?)",(piece,ds["id"],ds.get("version"),artifact_id,relative,raw_hash,json.dumps(source_timing,sort_keys=True),json.dumps({"raw_source_preserved":True},sort_keys=True)))
         for ti,track in enumerate(mid.tracks):
-            inventory=track_inventory[ti]; notes=[]
-            for msg in track:
-                if msg.type in {"note_on","note_off"}: notes.append(msg)
+            inventory=track_inventory[ti]
             trackid=inventory["source_track_id"]; programs=inventory["programs"]; drum=inventory["is_drum"]; name=inventory["source_track_name"]
-            if drum or not notes: continue
-            cand=stable("v1",trackid,sha(raw)); out=root/"derived"/ds["id"]/(cand+".mid"); out.parent.mkdir(parents=True,exist_ok=True)
+            if drum or not inventory["has_notes"]: continue
+            cand=stable("v1",trackid,raw_hash); out=root/"derived"/ds["id"]/(cand+".mid"); out.parent.mkdir(parents=True,exist_ok=True)
             one=mido.MidiFile(type=1,ticks_per_beat=mid.ticks_per_beat); one.tracks.append(track.copy()); one.save(out)
             brick3_input,conversion=convert_for_brick3(root,ds,out,cand)
-            provenance={"dataset_version":ds.get("version"),"source_piece_id":piece,"source_track_id":trackid,"sibling_track_ids":[entry["source_track_id"] for entry in track_inventory if entry["source_track_id"]!=trackid],"programs":programs,"is_drum":False,"source_track_name":name,"source_native_role":inventory["source_native_role"],"source_timing":source_timing,"source_relative_path":p.relative_to(folder).as_posix(),"source_artifact_id":artifact_id}
-            c.execute("insert or replace into items values(?,?,?,?,?,?,?)",(cand,ds["id"],"DERIVED",str(out),None,sha(raw),json.dumps({"provenance":provenance,"conversion":conversion})))
+            provenance={"dataset_version":ds.get("version"),"source_piece_id":piece,"source_track_id":trackid,"sibling_track_ids":[entry["source_track_id"] for entry in track_inventory if entry["source_track_id"]!=trackid],"programs":programs,"is_drum":False,"source_track_name":name,"source_native_role":inventory["source_native_role"],"source_timing":source_timing,"source_relative_path":relative,"source_artifact_id":artifact_id}
+            c.execute("insert or replace into items values(?,?,?,?,?,?,?)",(cand,ds["id"],"DERIVED",str(out),None,raw_hash,json.dumps({"provenance":provenance,"conversion":conversion})))
             result["candidates"]+=1
             # Exact pinned boundary: upstream process owns acceptance semantics.
             cmd=["uv","run","--directory",cfg["everbar_checkout"],"everbar-inspect-midi",str(brick3_input),"--root",str(brick3_input.parent),"--corpus-id",ds["id"]]

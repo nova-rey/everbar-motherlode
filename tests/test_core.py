@@ -2,7 +2,7 @@ import io, json, sqlite3, tarfile, zipfile
 from pathlib import Path
 from types import SimpleNamespace
 import pytest
-from everbar_motherlode.core import config, init, partition_for, preflight, stable, extract, db, derive, performance_flattening_v1, progress, reconcile, shard, writej
+from everbar_motherlode.core import config, init, partition_for, preflight, stable, extract, db, derive, performance_flattening_v1, progress, reconcile, shard, writej, _pdmx_partition_files
 from everbar_motherlode.distributed import output_prefix, publish_shard, shard_label, stage_shard, verify_distributed_run
 from everbar_motherlode.feature_base import backfill_canonical, extract_primitive_features
 
@@ -15,6 +15,21 @@ def test_partition_assignment_is_stable_and_complete():
     assignments=[partition_for("pdmx",path,3) for path in paths]
     assert assignments == [partition_for("pdmx",path,3) for path in paths]
     assert set(assignments) == {0,1,2}
+def test_pdmx_partition_manifest_is_durable_and_exact(tmp_path, monkeypatch):
+    root=tmp_path/"root"; folder=tmp_path/"extracted"; (folder/"mid"/"a").mkdir(parents=True)
+    paths=[folder/"mid"/"a"/f"piece-{i}.mid" for i in range(8)]
+    for path in paths: path.write_bytes(b"MThd")
+    source={"id":"pdmx","subset_url":"unused"}
+    monkeypatch.setattr("everbar_motherlode.core._pdmx_allowed_midi_paths",lambda *_:{p.relative_to(folder).as_posix() for p in paths})
+    seen=[]
+    for index in range(3):
+        seen.extend(_pdmx_partition_files(root,source,folder,3,index))
+    assert sorted(seen) == sorted(paths)
+    manifest=root/"state"/"manifests"/"pdmx-partitions-00003"
+    assert (manifest/"complete.json").exists()
+    # Reload uses the durable manifest rather than rebuilding the official set.
+    monkeypatch.setattr("everbar_motherlode.core._pdmx_allowed_midi_paths",lambda *_:pytest.fail("must not rebuild"))
+    assert _pdmx_partition_files(root,source,folder,3,0) == [p for p in paths if partition_for("pdmx",p.relative_to(folder).as_posix(),3)==0]
 def test_distributed_stage_is_run_scoped_and_retry_safe(tmp_path):
     c=cfg(); root=tmp_path/"root"; label=shard_label("pop909",1,2); shard_root=root/"state"/"shards"/label/"state"; shard_root.mkdir(parents=True)
     candidate=root/"derived"/"pop909"/"v1_x.mid"; candidate.parent.mkdir(parents=True); candidate.write_bytes(b"candidate")

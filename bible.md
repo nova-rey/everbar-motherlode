@@ -125,3 +125,7 @@ GigaMIDI staging has a protected Lightning-to-R2 path for the already acquired a
 ## 2026-08-22 — Source-specific license evidence review
 
 Reviewed the manual and unclear acquisition set against official project, dataset-card, and paper evidence. ATEPP, GiantMIDI-Piano, and Los Angeles MIDI now have explicit source-qualified records; only Los Angeles has an automatable public payload endpoint. PiJAMA, MID-FiLD, Pop1K7, and Symphony MIDI remain excluded because a code license, paper, or project page does not establish payload training rights. The review preserves user term acceptance without treating it as a substitute for upstream rights.
+
+## 2026-08-22 — Deterministic PDMX partition manifest
+
+PDMX workers now build one lock-protected immutable mapping from the official no-license-conflict list to deterministic partition ownership. Later shards consume only their assigned path list instead of repeatedly walking the full extracted tree and rebuilding the allow-list. Raw hashes and track note inventory are reused within each source piece; neither change alters candidate identities, source ownership, Brick 3 authority, or V2 provenance.
