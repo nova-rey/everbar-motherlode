@@ -145,3 +145,7 @@ Added a deployment handoff that stops only scheduler parents, waits for their in
 ## 2026-08-22 — Core-aware fourth-slot handoff
 
 The fourth PDMX slot is represented by a durable waiting wrapper while the existing MAESTRO/Aria job owns the fourth CPU. It execs the deterministic worker only after that job exits, so the controller retains four-slot completion semantics without avoidable CPU oversubscription.
+
+## 2026-08-22 — GPU feasibility review rejects ingestion rewrite
+
+The active Motherlode path is variable-length MIDI parsing, stateful performance flattening, pinned Brick 3 subprocess authority, and durable receipt I/O—not DataFrames, text tokenization, or a regular numeric kernel. Measurements on the CPU-only production worker show Brick 3 children consuming the available cores, so no CUDA, RAPIDS, or JAX rewrite is justified. A later independent canonical-event fingerprint or feature batch remains a contained candidate for a GPU benchmark without changing corpus semantics.
