@@ -1,7 +1,7 @@
 import io, json, sqlite3, tarfile, zipfile
 from pathlib import Path
 import pytest
-from everbar_motherlode.core import config, init, preflight, stable, extract, db, progress, reconcile
+from everbar_motherlode.core import config, init, preflight, stable, extract, db, performance_flattening_v1, progress, reconcile
 
 def cfg(): return config(Path("configs/motherlode-v1.toml"))
 def test_ids_are_machine_and_path_independent():
@@ -30,3 +30,27 @@ def test_reconcile_uses_everbar_event_identity(tmp_path):
     c.execute("insert into items values(?,?,?,?,?,?,?)",("v1_x","pop909","BRICK3_COMPLETE","x.mid",None,"raw",json.dumps({"receipt":{"canonical":{"event_sha256":"event-hash"}}})))
     c.commit(); c.close(); reconcile(tmp_path,cfg())
     c=db(tmp_path); assert c.execute("select canonical_hash from items where id='v1_x'").fetchone()[0] == "event-hash"; c.close()
+def test_performance_flattening_renders_pedals_and_drops_noops():
+    import mido
+    source=mido.MidiFile(); track=mido.MidiTrack(); source.tracks.append(track)
+    track.extend([
+        mido.Message("control_change",channel=0,control=64,value=127,time=0),
+        mido.Message("note_on",channel=0,note=60,velocity=90,time=0),
+        mido.Message("note_off",channel=0,note=60,velocity=0,time=10),
+        mido.Message("control_change",channel=0,control=64,value=0,time=10),
+        mido.Message("note_on",channel=0,note=62,velocity=90,time=0),
+        mido.Message("control_change",channel=0,control=66,value=127,time=5),
+        mido.Message("note_off",channel=0,note=62,velocity=0,time=10),
+        mido.Message("control_change",channel=0,control=66,value=0,time=10),
+        mido.Message("control_change",channel=0,control=67,value=127,time=0),
+        mido.Message("note_on",channel=0,note=70,velocity=90,time=0),
+        mido.Message("note_off",channel=0,note=70,velocity=0,time=0),
+    ])
+    flattened,counts=performance_flattening_v1(source)
+    absolute=0; events=[]
+    for msg in flattened.tracks[0]: absolute+=msg.time; events.append((absolute,msg))
+    offs=[(tick,msg.note) for tick,msg in events if msg.type=="note_off"]
+    assert (20,60) in offs and (45,62) in offs
+    assert not any(getattr(msg,"control",None) in {64,66,67} for _,msg in events)
+    assert not any(getattr(msg,"note",None)==70 for _,msg in events)
+    assert counts == {"cc64_rendered":2,"cc66_rendered":2,"cc67_discarded":1,"zero_duration_notes_dropped":1,"end_of_track_noteoffs":0}

@@ -86,6 +86,79 @@ def extract(root:Path,s:dict,artifact:Path)->Path:
     else: shutil.copy2(artifact,out/artifact.name)
     marker.write_text(sha(artifact.read_bytes())+"\n"); return out
 def midi_files(folder:Path): return sorted(p for p in folder.rglob("*") if p.suffix.lower() in {".mid",".midi"})
+PERFORMANCE_FLATTENING_POLICY="performance-flattening-v1"
+def performance_flattening_v1(mid):
+    """Render V1-supported pedal semantics without changing original MIDI bytes.
+
+    CC64 sustain and CC66 sostenuto delay note-offs; CC67 is explicitly
+    unrepresentable in V1 and removed. Verified zero-duration note pairs are
+    no-ops and are removed with an auditable count.
+    """
+    import mido
+    result=mido.MidiFile(type=mid.type,ticks_per_beat=mid.ticks_per_beat)
+    counts={"cc64_rendered":0,"cc66_rendered":0,"cc67_discarded":0,"zero_duration_notes_dropped":0,"end_of_track_noteoffs":0}
+    for track in mid.tracks:
+        absolute=0; sequence=0; events=[]; active={}; deferred=[]; sustain={}; sostenuto={}; eot=None; last_tick=0
+        def emit(tick,msg):
+            nonlocal sequence
+            events.append((tick,sequence,msg.copy(time=0))); sequence+=1
+        def flush(channel,tick):
+            for note in deferred[:]:
+                if note["channel"] != channel: continue
+                if sustain.get(channel,False) or (sostenuto.get(channel,False) and note["sostenuto"]): continue
+                emit(tick,note["off"]); deferred.remove(note)
+        for msg in track:
+            absolute+=msg.time; last_tick=max(last_tick,absolute)
+            if msg.type=="end_of_track": eot=(absolute,msg); continue
+            channel=getattr(msg,"channel",None)
+            if msg.type=="control_change" and msg.control in {64,66,67}:
+                if msg.control==67: counts["cc67_discarded"]+=1; continue
+                down=msg.value>=64
+                if msg.control==64:
+                    prior=sustain.get(channel,False); sustain[channel]=down; counts["cc64_rendered"]+=1
+                    if prior and not down: flush(channel,absolute)
+                else:
+                    prior=sostenuto.get(channel,False); sostenuto[channel]=down; counts["cc66_rendered"]+=1
+                    if down and not prior:
+                        for notes in active.values():
+                            for note in notes:
+                                if note["channel"]==channel: note["sostenuto"]=True
+                    if prior and not down:
+                        for note in deferred:
+                            if note["channel"]==channel: note["sostenuto"]=False
+                        flush(channel,absolute)
+                continue
+            is_on=msg.type=="note_on" and msg.velocity>0
+            is_off=msg.type=="note_off" or (msg.type=="note_on" and msg.velocity==0)
+            if is_on:
+                key=(channel,msg.note); emit(absolute,msg)
+                active.setdefault(key,[]).append({"channel":channel,"start":absolute,"event_index":len(events)-1,"sostenuto":False,"off":None})
+            elif is_off:
+                key=(channel,msg.note); notes=active.get(key,[])
+                if not notes: emit(absolute,msg); continue
+                note=notes.pop(); note["off"]=msg.copy(time=0)
+                if absolute==note["start"]:
+                    events[note["event_index"]]=None; counts["zero_duration_notes_dropped"]+=1; continue
+                if sustain.get(channel,False) or (sostenuto.get(channel,False) and note["sostenuto"]): deferred.append(note)
+                else: emit(absolute,msg)
+            else: emit(absolute,msg)
+        for note in deferred:
+            emit(last_tick,note["off"]); counts["end_of_track_noteoffs"]+=1
+        final=[event for event in events if event is not None]
+        if eot is not None: final.append((max(last_tick,eot[0]),sequence,eot[1].copy(time=0)))
+        final.sort(key=lambda item:(item[0],item[1])); out=mido.MidiTrack(); previous=0
+        for tick,_,msg in final:
+            out.append(msg.copy(time=tick-previous)); previous=tick
+        result.tracks.append(out)
+    return result,counts
+def convert_for_brick3(root:Path,ds:dict,candidate:Path,candidate_id:str):
+    import mido
+    original=candidate.read_bytes(); converted,counts=performance_flattening_v1(mido.MidiFile(candidate))
+    output=root/"derived"/ds["id"]/"prebrick3"/(candidate_id+".mid"); output.parent.mkdir(parents=True,exist_ok=True); converted.save(output)
+    receipt={"policy_id":PERFORMANCE_FLATTENING_POLICY,"source_candidate_id":candidate_id,"source_midi_sha256":sha(original),"output_midi_sha256":sha(output.read_bytes()),"source_path":str(candidate),"output_path":str(output),"counts":counts}
+    receipt["receipt_sha256"]=sha(json.dumps(receipt,sort_keys=True,separators=(",",":")))
+    writej(root/"receipts"/"conversion"/(candidate_id+".json"),receipt)
+    return output,receipt
 def _pdmx_allowed_midi_paths(root: Path, ds: dict) -> set[str]:
     """Map the official no-license-conflict JSON manifest to PDMX MIDI paths."""
     artifact=root/"raw"/ds["id"]/(ds["id"]+"-subset-paths.tar.gz")
@@ -121,16 +194,17 @@ def derive(root:Path,c,ds:dict,folder:Path,cfg:dict):
             if drum or not notes: continue
             cand=stable("v1",trackid,sha(raw)); out=root/"derived"/ds["id"]/(cand+".mid"); out.parent.mkdir(parents=True,exist_ok=True)
             one=mido.MidiFile(type=1,ticks_per_beat=mid.ticks_per_beat); one.tracks.append(track.copy()); one.save(out)
-            c.execute("insert or replace into items values(?,?,?,?,?,?,?)",(cand,ds["id"],"DERIVED",str(out),None,sha(raw),json.dumps({"source_piece_id":piece,"source_track_id":trackid,"sibling_track_ids":[stable('track',piece,x,'',[],False) for x in range(len(mid.tracks)) if x!=ti],"programs":programs,"is_drum":False,"source_track_name":name})))
+            brick3_input,conversion=convert_for_brick3(root,ds,out,cand)
+            c.execute("insert or replace into items values(?,?,?,?,?,?,?)",(cand,ds["id"],"DERIVED",str(out),None,sha(raw),json.dumps({"source_piece_id":piece,"source_track_id":trackid,"sibling_track_ids":[stable('track',piece,x,'',[],False) for x in range(len(mid.tracks)) if x!=ti],"programs":programs,"is_drum":False,"source_track_name":name,"conversion":conversion})))
             result["candidates"]+=1
             # Exact pinned boundary: upstream process owns acceptance semantics.
-            cmd=["uv","run","--directory",cfg["everbar_checkout"],"everbar-inspect-midi",str(out),"--root",str(out.parent),"--corpus-id",ds["id"]]
+            cmd=["uv","run","--directory",cfg["everbar_checkout"],"everbar-inspect-midi",str(brick3_input),"--root",str(brick3_input.parent),"--corpus-id",ds["id"]]
             run=subprocess.run(cmd,capture_output=True,text=True,timeout=120)
             if run.returncode==0 and run.stdout.strip():
                 receipt=json.loads(run.stdout.splitlines()[-1]); canonical=receipt.get("canonical_score_sha256") or ((receipt.get("canonical") or {}).get("event_sha256"))
-                c.execute("update items set state=?,canonical_hash=?,detail=? where id=?",("BRICK3_COMPLETE",canonical,json.dumps({"brick3":"ACCEPT","everbar_sha":cfg["everbar_sha"],"receipt":receipt}),cand)); result["accepts"]+=1
+                c.execute("update items set state=?,canonical_hash=?,detail=? where id=?",("BRICK3_COMPLETE",canonical,json.dumps({"brick3":"ACCEPT","everbar_sha":cfg["everbar_sha"],"conversion":conversion,"receipt":receipt}),cand)); result["accepts"]+=1
             else:
-                c.execute("update items set state=?,detail=? where id=?",("BRICK3_COMPLETE",json.dumps({"brick3":"REJECT","everbar_sha":cfg["everbar_sha"],"diagnostics":run.stderr[-2000:]}),cand)); result["rejects"]+=1
+                c.execute("update items set state=?,detail=? where id=?",("BRICK3_COMPLETE",json.dumps({"brick3":"REJECT","everbar_sha":cfg["everbar_sha"],"conversion":conversion,"diagnostics":run.stderr[-2000:]}),cand)); result["rejects"]+=1
     return result
 def progress(root:Path,cfg:dict,state="RUNNING",stage="DISCOVERY"):
     c=db(root); datasets=c.execute("select state,data from datasets").fetchall(); items=c.execute("select state,canonical_hash from items").fetchall(); c.close(); raw=sum(p.stat().st_size for p in (root/"raw").rglob("*") if p.is_file()); starts=(root/"state"/"started"); elapsed=max(1,time.time()-float(starts.read_text())) if starts.exists() else 1
