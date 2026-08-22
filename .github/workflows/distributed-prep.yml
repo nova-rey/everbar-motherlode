@@ -68,25 +68,12 @@ jobs:
       MOTHERLODE_INPUT_URI: ${{ inputs.input_uri }}
       MOTHERLODE_OUTPUT_URI: ${{ inputs.output_uri }}
       EVERBAR_CHECKOUT: ${{ github.workspace }}/.everbar-upstream
+      EVERBAR_SHA: 8876a0c0e4da91b32dd0542f543d97f2736e24c1
+      EVERBAR_BUNDLE_URI: r2:everbar-motherlode-input/tooling/everbar/8876a0c0e4da91b32dd0542f543d97f2736e24c1.bundle
       # Base64 avoids multiline-secret handling; no command prints this value.
       MOTHERLODE_RCLONE_CONFIG_B64: ${{ secrets.MOTHERLODE_RCLONE_CONFIG_B64 }}
     steps:
       - uses: actions/checkout@v4
-
-      # Brick 3 remains the pinned upstream authority.  This repository is
-      # public, so the protected Environment supplies a read-only deploy key
-      # scoped to the separate private Everbar repository.
-      - name: Check out pinned Everbar corpus authority
-        uses: actions/checkout@v4
-        with:
-          repository: nova-rey/dreamstream-everbar
-          ref: 8876a0c0e4da91b32dd0542f543d97f2736e24c1
-          path: .everbar-upstream
-          ssh-key: ${{ secrets.EVERBAR_READ_DEPLOY_KEY }}
-          persist-credentials: false
-
-      - name: Verify pinned Everbar checkout
-        run: test "$(git -C "$EVERBAR_CHECKOUT" rev-parse HEAD)" = 8876a0c0e4da91b32dd0542f543d97f2736e24c1
 
       - uses: astral-sh/setup-uv@v5
         with:
@@ -96,18 +83,30 @@ jobs:
       - name: Install CPU-only preparation dependencies
         run: uv sync --frozen --extra test
 
-      - name: Install rclone only when an object-storage URI is used
-        if: ${{ !startsWith(inputs.input_uri, 'file://') || !startsWith(inputs.output_uri, 'file://') }}
+      - name: Install rclone for protected storage access
         run: sudo apt-get update && sudo apt-get install --yes rclone
 
       - name: Configure private storage credentials
-        if: ${{ !startsWith(inputs.input_uri, 'file://') || !startsWith(inputs.output_uri, 'file://') }}
         run: |
           test -n "$MOTHERLODE_RCLONE_CONFIG_B64"
           install -d -m 700 "$RUNNER_TEMP/rclone"
           printf '%s' "$MOTHERLODE_RCLONE_CONFIG_B64" | base64 --decode > "$RUNNER_TEMP/rclone/rclone.conf"
           chmod 600 "$RUNNER_TEMP/rclone/rclone.conf"
           echo "RCLONE_CONFIG=$RUNNER_TEMP/rclone/rclone.conf" >> "$GITHUB_ENV"
+
+      # Brick 3 remains the pinned upstream authority. The exact Git commit is
+      # bundled from the trusted local checkout into private R2 because it is
+      # not yet published by the private GitHub remote. The bundle's hash and
+      # checked-out SHA are both verified before any corpus processing starts.
+      - name: Restore and verify pinned Everbar corpus authority
+        run: |
+          bundle="$RUNNER_TEMP/everbar.bundle"
+          rclone copyto "$EVERBAR_BUNDLE_URI" "$bundle"
+          rclone copyto "$EVERBAR_BUNDLE_URI.sha256" "$bundle.sha256"
+          (cd "$RUNNER_TEMP" && sha256sum -c "$(basename "$bundle").sha256")
+          git clone --quiet "$bundle" "$EVERBAR_CHECKOUT"
+          git -C "$EVERBAR_CHECKOUT" checkout --quiet --detach "$EVERBAR_SHA"
+          test "$(git -C "$EVERBAR_CHECKOUT" rev-parse HEAD)" = "$EVERBAR_SHA"
 
       - name: Prepare and publish one deterministic shard
         env:

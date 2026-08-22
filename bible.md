@@ -89,3 +89,7 @@ Provisioned private `everbar-motherlode-input` and `everbar-motherlode-output` R
 ## 2026-08-22 — Distributed smoke hardening
 
 Corrected the partition-state label so the deterministic worker and distributed publisher use the same fixed-width durable path. The workflow now uses `pipefail`, checks out the exact private Everbar authority through a protected read-only deploy key, and verifies the upstream SHA before any Brick 3 invocation. A real smoke run can no longer report a worker failure as a successful preparation job.
+
+## 2026-08-22 — Immutable Everbar authority bundle
+
+The configured Brick 3 SHA is present in the trusted local Everbar checkout but not fetchable from the private remote. The public worker therefore restores a checksummed private R2 Git bundle, checks out that exact SHA, and fails closed on either hash mismatch. This preserves the pinned semantic authority without silently changing policy or publishing the upstream repository.

@@ -44,6 +44,8 @@ Create a protected GitHub Environment named `corpus-write`, and add `MOTHERLODE_
 
 The project R2 configuration uses `r2:everbar-motherlode-input` and `r2:everbar-motherlode-output`. They are private buckets; `raw/<dataset-id>/` is staged into the input bucket before a dispatch, and runs are published under the output bucket's `runs/<run-id>/` prefix. The GitHub secret contains the endpoint and S3 access pair only; it is never committed or printed by the workflow.
 
+The public workflow restores its exact, private Everbar Brick 3 authority from the immutable `tooling/everbar/<sha>.bundle` object in the input bucket. The bundle checksum and checked-out Git SHA are both verified. This is an explicit pinned integration boundary: Motherlode does not copy or fork Brick 3 semantics, and a run cannot proceed if the authority bundle is unavailable or mismatched.
+
 ## Launch sequence
 
 1. Run the local equivalence test (`uv run pytest -q`). It proves stable complete, non-overlapping partition ownership and package/retry behavior on a deterministic fixture.
