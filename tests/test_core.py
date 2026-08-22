@@ -25,6 +25,15 @@ def test_safe_extraction_rejects_traversal(tmp_path):
         info=tarfile.TarInfo("../escape.mid"); info.size=2
         archive.addfile(info,io.BytesIO(b"no"))
     with pytest.raises(ValueError): extract(tmp_path,{"id":"bad-tar"},tar)
+def test_gigamidi_nested_zip_extraction_is_resumable(tmp_path):
+    inner=io.BytesIO()
+    with zipfile.ZipFile(inner,"w") as z: z.writestr("training/example.mid",b"MThd")
+    outer=tmp_path/"giga.zip"
+    with zipfile.ZipFile(outer,"w") as z: z.writestr("Final/training.zip",inner.getvalue())
+    out=extract(tmp_path,{"id":"gigamidi"},outer)
+    assert (out/"Final"/"training"/"example.mid").read_bytes() == b"MThd"
+    assert (out/".gigamidi-nested-complete").exists()
+    assert extract(tmp_path,{"id":"gigamidi"},outer) == out
 def test_progress_and_disk_guard(tmp_path):
     c=cfg(); c["min_free_bytes"]=10**30
     assert not preflight(tmp_path,c)["ok"]

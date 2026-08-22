@@ -1,5 +1,5 @@
 from __future__ import annotations
-import hashlib, json, os, shutil, sqlite3, subprocess, sys, tarfile, time, tomllib, urllib.parse, urllib.request, zipfile
+import fcntl, hashlib, json, os, shutil, sqlite3, subprocess, sys, tarfile, time, tomllib, urllib.parse, urllib.request, zipfile
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path, PurePosixPath
@@ -65,26 +65,50 @@ def download(root:Path,s:dict)->Path:
             if attempt==2: raise
             time.sleep(2**attempt)
     raise RuntimeError("unreachable")
+def _safe_zip_extract(artifact:Path,out:Path):
+    with zipfile.ZipFile(artifact) as z:
+        for m in z.infolist():
+            target=(out/m.filename).resolve()
+            if not target.is_relative_to(out.resolve()): raise ValueError("unsafe archive member")
+        z.extractall(out)
+def _extract_gigamidi_nested(out:Path):
+    """Expand GigaMIDI's documented split ZIPs without treating ZIP bytes as MIDI.
+
+    The published outer archive contains test/validation MIDI ZIPs and a
+    training ZIP whose members are three further split ZIPs.  Mark each nested
+    archive only after its safe extraction completes, so an interruption is
+    resumable and concurrent partition workers cannot observe a false-ready
+    corpus.
+    """
+    while True:
+        pending=[p for p in sorted(out.rglob("*.zip")) if not p.with_suffix(p.suffix+".expanded").exists()]
+        if not pending: return
+        for nested in pending:
+            _safe_zip_extract(nested,nested.parent)
+            nested.with_suffix(nested.suffix+".expanded").write_text(sha(nested.read_bytes())+"\n")
 def extract(root:Path,s:dict,artifact:Path)->Path:
-    out=root/"extracted"/s["id"]; marker=out/".complete"
-    if marker.exists(): return out
+    out=root/"extracted"/s["id"]; marker=out/".complete"; nested_marker=out/".gigamidi-nested-complete"
     out.mkdir(parents=True,exist_ok=True)
-    if zipfile.is_zipfile(artifact):
-        with zipfile.ZipFile(artifact) as z:
-            for m in z.infolist():
-                target=(out/m.filename).resolve()
-                if not target.is_relative_to(out.resolve()): raise ValueError("unsafe archive member")
-            z.extractall(out)
-    elif tarfile.is_tarfile(artifact):
-        with tarfile.open(artifact) as archive:
-            members = archive.getmembers()
-            for member in members:
-                target = (out/member.name).resolve()
-                if not target.is_relative_to(out.resolve()) or member.issym() or member.islnk():
-                    raise ValueError("unsafe archive member")
-            archive.extractall(out, members=members, filter="data")
-    else: shutil.copy2(artifact,out/artifact.name)
-    marker.write_text(sha(artifact.read_bytes())+"\n"); return out
+    # A file lock serializes extraction when partition zero exposes a large
+    # archive and later partitions are launched after its readiness marker.
+    with (out/".extract.lock").open("w") as lock:
+        fcntl.flock(lock,fcntl.LOCK_EX)
+        if marker.exists() and (s["id"] != "gigamidi" or nested_marker.exists()): return out
+        if not marker.exists():
+            if zipfile.is_zipfile(artifact): _safe_zip_extract(artifact,out)
+            elif tarfile.is_tarfile(artifact):
+                with tarfile.open(artifact) as archive:
+                    members = archive.getmembers()
+                    for member in members:
+                        target = (out/member.name).resolve()
+                        if not target.is_relative_to(out.resolve()) or member.issym() or member.islnk(): raise ValueError("unsafe archive member")
+                    archive.extractall(out, members=members, filter="data")
+            else: shutil.copy2(artifact,out/artifact.name)
+            marker.write_text(sha(artifact.read_bytes())+"\n")
+        if s["id"] == "gigamidi":
+            _extract_gigamidi_nested(out)
+            nested_marker.write_text(sha(artifact.read_bytes())+"\n")
+    return out
 def midi_files(folder:Path): return sorted(p for p in folder.rglob("*") if p.suffix.lower() in {".mid",".midi"})
 def partition_for(dataset_id:str,relative_path:str,partitions:int)->int:
     if partitions < 1: raise ValueError("partitions must be positive")
