@@ -137,3 +137,7 @@ Added the durable worker launcher used by the Lightning deployment. It checks a 
 ## 2026-08-22 — Four-slot resumable wave controller
 
 Generalized the validated receipt guard for PDMX and GigaMIDI and added a four-slot Lightning wave controller. The controller serializes GigaMIDI's one-time nested extraction, then resumes independent deterministic partitions and performs only the existing reconciliation/merge handoff. It does not change corpus semantics or introduce shared writable worker state.
+
+## 2026-08-22 — Atomic Lightning wave deployment
+
+Added a deployment handoff that stops only scheduler parents, waits for their in-flight chunks to finish, retains the prior source tree as rollback evidence, then starts the validated four-slot workers and next-wave controller. This lets performance changes enter between chunks without killing, repeating, or silently changing completed corpus work.
