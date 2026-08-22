@@ -2,7 +2,7 @@ import io, json, sqlite3, tarfile, zipfile
 from pathlib import Path
 from types import SimpleNamespace
 import pytest
-from everbar_motherlode.core import config, init, partition_for, preflight, stable, extract, db, derive, performance_flattening_v1, progress, reconcile, shard, writej, _pdmx_partition_files
+from everbar_motherlode.core import config, init, partition_for, preflight, stable, extract, db, derive, performance_flattening_v1, progress, reconcile, shard, writej, _pdmx_partition_files, _partition_manifest_files, brick3_command
 from everbar_motherlode.distributed import output_prefix, publish_shard, shard_label, stage_shard, verify_distributed_run
 from everbar_motherlode.feature_base import backfill_canonical, extract_primitive_features
 
@@ -30,6 +30,24 @@ def test_pdmx_partition_manifest_is_durable_and_exact(tmp_path, monkeypatch):
     # Reload uses the durable manifest rather than rebuilding the official set.
     monkeypatch.setattr("everbar_motherlode.core._pdmx_allowed_midi_paths",lambda *_:pytest.fail("must not rebuild"))
     assert _pdmx_partition_files(root,source,folder,3,0) == [p for p in paths if partition_for("pdmx",p.relative_to(folder).as_posix(),3)==0]
+
+def test_large_source_partition_manifest_is_durable_and_exact(tmp_path, monkeypatch):
+    root=tmp_path/"root"; folder=tmp_path/"extracted"; (folder/"nested").mkdir(parents=True)
+    paths=[folder/"nested"/f"piece-{i}.mid" for i in range(11)]
+    for path in paths: path.write_bytes(b"MThd")
+    source={"id":"gigamidi"}; seen=[]
+    for index in range(4): seen.extend(_partition_manifest_files(root,source,folder,4,index))
+    assert sorted(seen) == sorted(paths)
+    manifest=root/"state"/"manifests"/"gigamidi-partitions-00004"
+    assert (manifest/"complete.json").exists()
+    monkeypatch.setattr("everbar_motherlode.core.midi_files",lambda *_:pytest.fail("must not rediscover"))
+    assert _partition_manifest_files(root,source,folder,4,0) == [p for p in paths if partition_for("gigamidi",p.relative_to(folder).as_posix(),4)==0]
+
+def test_direct_brick3_runner_is_checkout_bound_and_fails_closed(tmp_path):
+    checkout=tmp_path/"everbar"; cli=checkout/".venv"/"bin"/"everbar-inspect-midi"; cli.parent.mkdir(parents=True); cli.write_text("#!/bin/sh\n"); cli.chmod(0o755)
+    command=brick3_command({"everbar_checkout":str(checkout),"brick3_runner":"direct-venv"},tmp_path/"input.mid",tmp_path,"fixture")
+    assert command == [str(cli),str(tmp_path/"input.mid"),"--root",str(tmp_path),"--corpus-id","fixture"]
+    with pytest.raises(RuntimeError): brick3_command({"everbar_checkout":str(tmp_path/"missing"),"brick3_runner":"direct-venv"},tmp_path/"input.mid",tmp_path,"fixture")
 def test_distributed_stage_is_run_scoped_and_retry_safe(tmp_path):
     c=cfg(); root=tmp_path/"root"; label=shard_label("pop909",1,2); shard_root=root/"state"/"shards"/label/"state"; shard_root.mkdir(parents=True)
     candidate=root/"derived"/"pop909"/"v1_x.mid"; candidate.parent.mkdir(parents=True); candidate.write_bytes(b"candidate")

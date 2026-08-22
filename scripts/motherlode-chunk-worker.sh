@@ -11,6 +11,11 @@ chunks=${MOTHERLODE_CHUNKS:-96}
 
 cd "$repo"
 export EVERBAR_CHECKOUT=${EVERBAR_CHECKOUT:?EVERBAR_CHECKOUT is required}
+runner="$repo/.venv/bin/everbar-motherlode"
+if test ! -x "$runner"; then
+  echo "Motherlode checkout virtualenv command is unavailable: $runner" >&2
+  exit 1
+fi
 
 for ((index=slot; index<chunks; index+=4)); do
   printf -v label '%s-part-%05d-of-%05d' "$dataset" "$index" "$chunks"
@@ -24,6 +29,6 @@ PY
   then
     continue
   fi
-  uv run everbar-motherlode shard --root "$root" --config "$repo/configs/motherlode-v1.toml" \
+  "$runner" shard --root "$root" --config "$repo/configs/motherlode-v1.toml" \
     --dataset "$dataset" --partition-index "$index" --partitions "$chunks"
 done

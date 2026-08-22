@@ -149,3 +149,7 @@ The fourth PDMX slot is represented by a durable waiting wrapper while the exist
 ## 2026-08-22 — GPU feasibility review rejects ingestion rewrite
 
 The active Motherlode path is variable-length MIDI parsing, stateful performance flattening, pinned Brick 3 subprocess authority, and durable receipt I/O—not DataFrames, text tokenization, or a regular numeric kernel. Measurements on the CPU-only production worker show Brick 3 children consuming the available cores, so no CUDA, RAPIDS, or JAX rewrite is justified. A later independent canonical-event fingerprint or feature batch remains a contained candidate for a GPU benchmark without changing corpus semantics.
+
+## 2026-08-22 — Production-path performance pass
+
+Motherlode now avoids a repeated whole-tree GigaMIDI scan for every worker by publishing one deterministic lock-protected partition manifest. It also fuses source timing/inventory into the required raw-byte parse, eliminates retained note-message lists used only as booleans, makes canonical bar occupancy linear in notes plus bars, and permits a fail-closed direct invocation of the exact pinned Everbar checkout CLI. These are strictly operational improvements: raw bytes, source identities, partition ownership, receipts, Brick 3 authority, and canonical output remain unchanged.

@@ -116,18 +116,32 @@ def materialize_canonical_stream(conn: sqlite3.Connection, *, stream_id: str, da
     ))
     conn.execute("delete from canonical_notes where stream_id=?", (stream_id,))
     conn.execute("delete from canonical_bars where stream_id=?", (stream_id,))
+    note_rows = []
+    # A difference array makes bar occupancy O(notes + bars), rather than
+    # rescanning every note for every bar of a long accepted stream. It is only
+    # an insertion optimization: the durable canonical note and bar values are
+    # identical to the previous definition.
+    active_delta = [0] * (bar_count + 1)
     for index, (onset, duration, pitch, velocity) in enumerate(normalized):
         end = onset + duration
-        conn.execute("insert into canonical_notes values(?,?,?,?,?,?,?,?,?,?)", (
-            stream_id, index, onset, duration, end, pitch, velocity, onset // bar_ticks,
-            max(onset // bar_ticks, (end - 1) // bar_ticks), onset % bar_ticks,
+        onset_bar = onset // bar_ticks
+        end_bar = max(onset_bar, (end - 1) // bar_ticks)
+        note_rows.append((
+            stream_id, index, onset, duration, end, pitch, velocity, onset_bar,
+            end_bar, onset % bar_ticks,
         ))
+        active_delta[onset_bar] += 1
+        active_delta[end_bar + 1] -= 1
+    conn.executemany("insert into canonical_notes values(?,?,?,?,?,?,?,?,?,?)", note_rows)
+    active = 0
+    bar_rows = []
     for index in range(bar_count):
+        active += active_delta[index]
         start, end = index * bar_ticks, (index + 1) * bar_ticks
-        empty = not any(onset < end and onset + duration > start for onset, duration, _pitch, _velocity in normalized)
-        conn.execute("insert into canonical_bars values(?,?,?,?,?,?,?,?)", (
-            stream_id, index, start, end, numerator, denominator, numerator * 4 / denominator, int(empty),
+        bar_rows.append((
+            stream_id, index, start, end, numerator, denominator, numerator * 4 / denominator, int(active == 0),
         ))
+    conn.executemany("insert into canonical_bars values(?,?,?,?,?,?,?,?)", bar_rows)
     return True
 
 

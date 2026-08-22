@@ -1,5 +1,5 @@
 from __future__ import annotations
-import fcntl, hashlib, json, os, shutil, sqlite3, subprocess, sys, tarfile, time, tomllib, urllib.parse, urllib.request, zipfile
+import fcntl, hashlib, io, json, os, shutil, sqlite3, subprocess, sys, tarfile, time, tomllib, urllib.parse, urllib.request, zipfile
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path, PurePosixPath
@@ -213,7 +213,7 @@ def sample_brick3(root:Path,cfg:dict,dataset_ids:list[str],limit:int=64):
             converted,counts=performance_flattening_v1(mido.MidiFile(candidate)); output=output_dir/candidate.name; converted.save(output)
             conversion={"policy_id":PERFORMANCE_FLATTENING_POLICY,"sample":True,"source_candidate_id":candidate.stem,"source_midi_sha256":sha(candidate.read_bytes()),"output_midi_sha256":sha(output.read_bytes()),"source_path":str(candidate),"output_path":str(output),"counts":counts}
             conversion["receipt_sha256"]=sha(json.dumps(conversion,sort_keys=True,separators=(",",":"))); writej(receipt_dir/(candidate.stem+".json"),conversion)
-            run=subprocess.run(["uv","run","--directory",cfg["everbar_checkout"],"everbar-inspect-midi",str(output),"--root",str(output_dir),"--corpus-id",dataset_id],capture_output=True,text=True,timeout=120)
+            run=subprocess.run(brick3_command(cfg,output,output_dir,dataset_id),capture_output=True,text=True,timeout=120,cwd=cfg["everbar_checkout"])
             if run.returncode or not run.stdout.strip():
                 execution_failures.append({"candidate_id":candidate.stem,"diagnostic":run.stderr[-500:]}); code_streams["EXECUTION_FAILURE"]+=1; continue
             receipt=json.loads(run.stdout.splitlines()[-1]); decision=receipt.get("decision",{}); codes=set(decision.get("reason_codes",[]))
@@ -273,33 +273,98 @@ def _pdmx_partition_files(root: Path, ds: dict, folder: Path, partitions: int, p
     if entry.get("dataset_id") != ds["id"] or entry.get("partitions") != partitions or entry.get("partition_index") != partition_index:
         raise ValueError("invalid PDMX partition manifest")
     return [folder / relative for relative in entry["paths"]]
+
+
+def _partition_manifest_files(root: Path, ds: dict, folder: Path, partitions: int, partition_index: int) -> list[Path]:
+    """Build once and reuse a deterministic complete MIDI partition map.
+
+    Large multi-worker sources such as GigaMIDI must not have every worker walk
+    and sort the entire extracted tree before discarding all but its own paths.
+    The map is an immutable cache of the same sorted discovery result and the
+    existing ``partition_for`` ownership function; it does not alter stream
+    IDs, candidate order within a partition, or source selection.
+    """
+    if partitions < 1 or not 0 <= partition_index < partitions:
+        raise ValueError("partition index is outside partition count")
+    base = root / "state" / "manifests" / f"{ds['id']}-partitions-{partitions:05d}"
+    marker = base / "complete.json"
+    lock_path = base.with_suffix(".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if not marker.exists():
+            grouped = [[] for _ in range(partitions)]
+            for path in midi_files(folder):
+                relative = path.relative_to(folder).as_posix()
+                grouped[partition_for(ds["id"], relative, partitions)].append(relative)
+            base.mkdir(parents=True, exist_ok=True)
+            for index, paths in enumerate(grouped):
+                writej(base / f"part-{index:05d}.json", {
+                    "dataset_id": ds["id"], "partitions": partitions,
+                    "partition_index": index, "paths": paths,
+                })
+            writej(marker, {
+                "state": "COMPLETE", "dataset_id": ds["id"], "partitions": partitions,
+                "source_path_count": sum(len(paths) for paths in grouped),
+                "partition_counts": [len(paths) for paths in grouped],
+            })
+        entry = json.loads((base / f"part-{partition_index:05d}.json").read_text())
+    if entry.get("dataset_id") != ds["id"] or entry.get("partitions") != partitions or entry.get("partition_index") != partition_index:
+        raise ValueError("invalid source partition manifest")
+    return [folder / relative for relative in entry["paths"]]
+
+
+def brick3_command(cfg: dict, input_path: Path, output_root: Path, dataset_id: str) -> list[str]:
+    """Return the pinned Brick 3 invocation without changing its authority.
+
+    ``uv run`` remains the portable default. Production can explicitly select
+    the already-created checkout virtualenv to avoid resolving the uv launcher
+    for millions of individual candidates. The direct binary is accepted only
+    when it is the checkout's own executable; otherwise fail closed instead of
+    silently selecting a different Everbar installation.
+    """
+    mode = cfg.get("brick3_runner", "uv")
+    common = [str(input_path), "--root", str(output_root), "--corpus-id", dataset_id]
+    if mode == "uv":
+        return ["uv", "run", "--directory", cfg["everbar_checkout"], "everbar-inspect-midi", *common]
+    if mode == "direct-venv":
+        executable = Path(cfg["everbar_checkout"]) / ".venv" / "bin" / "everbar-inspect-midi"
+        if not executable.is_file() or not os.access(executable, os.X_OK):
+            raise RuntimeError(f"pinned Everbar CLI is unavailable: {executable}")
+        return [str(executable), *common]
+    raise ValueError(f"unknown Brick 3 runner mode: {mode}")
 def derive(root:Path,c,ds:dict,folder:Path,cfg:dict,partition_index:int=0,partitions:int=1):
     import mido
     result={"pieces":0,"tracks":0,"candidates":0,"accepts":0,"rejects":0}
-    files = _pdmx_partition_files(root, ds, folder, partitions, partition_index) if ds["id"] == "pdmx" else midi_files(folder)
+    files = (_pdmx_partition_files(root, ds, folder, partitions, partition_index) if ds["id"] == "pdmx"
+             else _partition_manifest_files(root, ds, folder, partitions, partition_index) if partitions > 1
+             else midi_files(folder))
     for p in files:
         relative=p.relative_to(folder).as_posix()
         if ds["id"] != "pdmx" and partition_for(ds["id"],relative,partitions) != partition_index: continue
-        raw=p.read_bytes(); raw_hash=sha(raw); rawid=stable("artifact",ds["id"],raw_hash); piece=stable("piece",ds["id"],rawid,relative); result["pieces"]+=1
-        try: mid=mido.MidiFile(p)
+        raw=p.read_bytes(); raw_hash=sha(raw); artifact_id=stable("artifact",ds["id"],raw_hash); piece=stable("piece",ds["id"],artifact_id,relative); result["pieces"]+=1
+        # ``raw`` is already required for immutable source hashing. Parsing it
+        # directly removes a second filesystem read for every source file.
+        try: mid=mido.MidiFile(file=io.BytesIO(raw))
         except Exception: continue
-        source_timing={"source_tpq":int(mid.ticks_per_beat),"track_end_ticks":[sum(int(message.time) for message in track) for track in mid.tracks]}
-        artifact_id=stable("artifact",ds["id"],raw_hash)
         track_inventory=[]
         for ti,track in enumerate(mid.tracks):
-            notes=[]; programs=[]; channels=[]; drum=False; name=""
+            programs=[]; channels=[]; drum=False; name=""; has_notes=False; track_end_tick=0
             for msg in track:
+                track_end_tick+=int(msg.time)
                 if msg.type=="track_name": name=msg.name
                 if msg.type=="program_change": programs.append(msg.program)
                 if hasattr(msg,"channel"):
                     channels.append(msg.channel)
                     if msg.channel==9: drum=True
-                if msg.type in {"note_on","note_off"}: notes.append(msg)
+                if msg.type in {"note_on","note_off"}: has_notes=True
             result["tracks"]+=1
             trackid=stable("track",piece,ti,name,programs,drum)
-            inventory={"source_track_id":trackid,"track_index":ti,"source_track_name":name,"programs":programs,"channels":sorted(set(channels)),"is_drum":drum,"has_notes":bool(notes),"source_native_role":None}
+            inventory={"source_track_id":trackid,"track_index":ti,"source_track_name":name,"programs":programs,"channels":sorted(set(channels)),"is_drum":drum,"has_notes":has_notes,"source_native_role":None,"track_end_tick":track_end_tick}
             track_inventory.append(inventory)
-            c.execute("insert or replace into source_tracks values(?,?,?,?,?,?,?,?,?,?)",(trackid,piece,ti,name,json.dumps(programs),json.dumps(sorted(set(channels))),int(drum),int(bool(notes)),None,json.dumps({"track_end_tick":source_timing["track_end_ticks"][ti]})))
+        source_timing={"source_tpq":int(mid.ticks_per_beat),"track_end_ticks":[entry["track_end_tick"] for entry in track_inventory]}
+        for inventory in track_inventory:
+            c.execute("insert or replace into source_tracks values(?,?,?,?,?,?,?,?,?,?)",(inventory["source_track_id"],piece,inventory["track_index"],inventory["source_track_name"],json.dumps(inventory["programs"]),json.dumps(inventory["channels"]),int(inventory["is_drum"]),int(inventory["has_notes"]),None,json.dumps({"track_end_tick":inventory["track_end_tick"]})))
         c.execute("insert or replace into source_pieces values(?,?,?,?,?,?,?,?)",(piece,ds["id"],ds.get("version"),artifact_id,relative,raw_hash,json.dumps(source_timing,sort_keys=True),json.dumps({"raw_source_preserved":True},sort_keys=True)))
         for ti,track in enumerate(mid.tracks):
             inventory=track_inventory[ti]
@@ -312,8 +377,8 @@ def derive(root:Path,c,ds:dict,folder:Path,cfg:dict,partition_index:int=0,partit
             c.execute("insert or replace into items values(?,?,?,?,?,?,?)",(cand,ds["id"],"DERIVED",str(out),None,raw_hash,json.dumps({"provenance":provenance,"conversion":conversion})))
             result["candidates"]+=1
             # Exact pinned boundary: upstream process owns acceptance semantics.
-            cmd=["uv","run","--directory",cfg["everbar_checkout"],"everbar-inspect-midi",str(brick3_input),"--root",str(brick3_input.parent),"--corpus-id",ds["id"]]
-            run=subprocess.run(cmd,capture_output=True,text=True,timeout=120)
+            cmd=brick3_command(cfg,brick3_input,brick3_input.parent,ds["id"])
+            run=subprocess.run(cmd,capture_output=True,text=True,timeout=120,cwd=cfg["everbar_checkout"])
             if run.returncode==0 and run.stdout.strip():
                 receipt=json.loads(run.stdout.splitlines()[-1]); canonical=receipt.get("canonical_score_sha256") or ((receipt.get("canonical") or {}).get("event_sha256"))
                 existing=json.loads(c.execute("select detail from items where id=?",(cand,)).fetchone()[0])
