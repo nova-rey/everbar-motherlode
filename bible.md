@@ -162,6 +162,10 @@ The deployed user service pins the local Codex CLI directory in its execution PA
 
 The remote probe passes the configured corpus root explicitly into the SSH command, so receipt and PID checks execute against the intended persistent root rather than inheriting an absent remote shell variable.
 
+The detached health probe retries transient SSH failures three times before it
+escalates. One Lightning routing hiccup therefore cannot wake an expensive
+repair turn while healthy workers continue processing.
+
 ## 2026-08-22 — Immutable EV1 preview snapshot seam
 
 Added a read-only snapshot builder for completed clean PDMX partitions plus

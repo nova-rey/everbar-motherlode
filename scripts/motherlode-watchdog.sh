@@ -75,11 +75,17 @@ PY
 )
 
 remote_root=$(printf '%q' "$MOTHERLODE_ROOT")
-if ! raw=$(ssh -o BatchMode=yes -o ConnectTimeout=15 "$MOTHERLODE_SSH" "MOTHERLODE_ROOT=$remote_root python3 - <<'PY'
+raw=''
+for attempt in 1 2 3; do
+  if raw=$(ssh -o BatchMode=yes -o ConnectTimeout=15 "$MOTHERLODE_SSH" "MOTHERLODE_ROOT=$remote_root python3 - <<'PY'
 $probe
 PY" 2>/dev/null); then
-  raw='{"probe_error":"ssh_unavailable"}'
-fi
+    break
+  fi
+  raw=''
+  [[ $attempt == 3 ]] || sleep 5
+done
+if [[ -z "$raw" ]]; then raw='{"probe_error":"ssh_unavailable"}'; fi
 
 assessment=$(RAW_PROBE="$raw" WATCHDOG_STATE="$state_dir/state.json" NOW="$now" MAX_PROGRESS_AGE="$max_progress_age" NO_PROGRESS_GRACE="$no_progress_grace" python3 - <<'PY'
 import json, os
