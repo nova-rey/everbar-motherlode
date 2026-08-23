@@ -171,6 +171,10 @@ canonical notes/bars without raw MIDI or Brick 3, and writes the existing
 Brick 8 packed-view contract. The live Motherlode queue is not a dependency or
 write target of this operation.
 
+The CPU-only constructor emits the already-specified Brick 6 profile JSON
+directly, avoiding a Torch import that belongs only to training/sampling. This
+keeps receipt-to-package construction usable on the dedicated corpus host.
+
 ## 2026-08-22 — POP909 fast-lane proof-of-concept builder
 
 Added an isolated POP909-only preparation path that reuses the verified

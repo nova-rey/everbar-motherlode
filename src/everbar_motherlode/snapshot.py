@@ -158,9 +158,12 @@ def build(*, motherlode_root: Path, output_root: Path, everbar_checkout: Path, m
     for split,values in split_indices.items(): np.save(packed/f"{split}-indices.npy",np.asarray(values,dtype=np.int64))
     window_sha=_write_jsonl(packed/"window-manifest.jsonl",windows_manifest)
     from dreamstream_everbar.packing.format import PackingFormat
-    from dreamstream_everbar.generation.length import LengthProfile
     fmt=PackingFormat(format_id=f"{name}-block-format-v1-cap-{cap}",cap=cap,production=False); block=fmt.to_dict()|{"format_sha256":fmt.format_sha256,"scope":"EV1_PREVIEW_ONLY","corpus_membership_sha256":membership_sha}; _write(packed/"block-format.json",block)
-    lengths=Counter(len(ids) for row in kept for ids in row["bar_ids"][1:]); length=LengthProfile(profile_id=f"{name}-active-length-v1-cap-{cap}",block_format_id=fmt.format_id,block_format_sha256=fmt.format_sha256,cap=cap,counts=tuple(sorted(lengths.items())),status="TEST_ONLY",source_profile_sha256=_sha(profile)).to_dict(); length|={"scope":"EV1_PREVIEW_ONLY","corpus_membership_sha256":membership_sha}; _write(packed/"active-length-profile.json",length)
+    # Keep corpus construction CPU-only.  The profile JSON is the frozen Brick
+    # 6 schema; importing its sampling class would unnecessarily import Torch.
+    lengths=Counter(len(ids) for row in kept for ids in row["bar_ids"][1:])
+    length={"schema":"dreamstream-everbar.length-profile/v1","profile_id":f"{name}-active-length-v1-cap-{cap}","block_format":{"format_id":fmt.format_id,"format_sha256":fmt.format_sha256,"cap":cap},"counts":[{"active_length":key,"count":value} for key,value in sorted(lengths.items())],"status":"TEST_ONLY","source_profile_sha256":_sha(profile)}
+    length["profile_sha256"]=_sha(length); length|={"scope":"EV1_PREVIEW_ONLY","corpus_membership_sha256":membership_sha}; _write(packed/"active-length-profile.json",length)
     stream_counts=Counter(x["split"] for x in kept); bar_counts=Counter(); token_counts=Counter()
     for row in kept: bar_counts[row["split"]]+=len(row["bar_ids"]); token_counts[row["split"]]+=sum(map(len,row["bar_ids"]))
     source_versions={"pdmx":"Zenodo 15571083 / CC0-1.0","pop909":"2020 / MIT"}
