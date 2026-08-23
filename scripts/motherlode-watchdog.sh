@@ -67,6 +67,22 @@ if progress_path.exists():
         progress = {"state": "INVALID_JSON"}
 
 converted = progress.get("live_converted_by_dataset") or {}
+# Chunk workers write V1 derivative MIDIs continuously but only publish the
+# aggregate progress receipt at a durable chunk boundary.  The pre-Brick-3
+# directories are intentionally flat, so their directory mtime is a cheap
+# durable movement witness: it advances whenever a candidate is atomically
+# created, without recursively scanning the corpus every watchdog interval.
+derivative_mtimes = {}
+for dataset in ("pdmx", "gigamidi"):
+    directory = root / "derived" / dataset / "prebrick3"
+    try:
+        derivative_mtimes[dataset] = directory.stat().st_mtime
+    except OSError:
+        derivative_mtimes[dataset] = None
+latest_derivative_mtime = max(
+    (value for value in derivative_mtimes.values() if value is not None),
+    default=None,
+)
 print(json.dumps({
     "pids": pids,
     "pid_numbers": pid_numbers,
@@ -76,6 +92,8 @@ print(json.dumps({
     "stage": progress.get("current_stage"),
     "converted_streams": sum(int(value) for value in converted.values()),
     "converted_by_dataset": converted,
+    "derivative_mtimes": derivative_mtimes,
+    "latest_derivative_mtime": latest_derivative_mtime,
 }, sort_keys=True))
 PY
 )
@@ -133,12 +151,22 @@ count = int(probe.get("converted_streams") or 0)
 last_count = previous.get("last_count")
 last_progress_at = previous.get("last_progress_at", now)
 run_changed = previous.get("probe", {}).get("pid_numbers") != probe.get("pid_numbers")
+latest_derivative_mtime = probe.get("latest_derivative_mtime")
+previous_derivative_mtime = previous.get("probe", {}).get("latest_derivative_mtime")
+derivative_advanced = (
+    latest_derivative_mtime is not None
+    and (previous_derivative_mtime is None or float(latest_derivative_mtime) > float(previous_derivative_mtime))
+)
+derivative_recent = (
+    latest_derivative_mtime is not None
+    and now - float(latest_derivative_mtime) <= int(os.environ["NO_PROGRESS_GRACE"])
+)
 if run_changed:
     # A Lightning stop/start replaces every scheduler PID while preserving
     # completed shard receipts.  Start a fresh movement grace period.
     last_progress_at = now
 elif not faults and last_count is not None:
-    if count > int(last_count):
+    if count > int(last_count) or derivative_advanced or derivative_recent:
         last_progress_at = now
     elif now - int(last_progress_at) > int(os.environ["NO_PROGRESS_GRACE"]):
         faults.append("no_conversion_progress")

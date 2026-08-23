@@ -175,6 +175,11 @@ The movement grace period now resets when Lightning resumes the scheduler with
 new PIDs. This distinguishes a safe receipt-preserving studio restart from a
 stalled active wave.
 
+The watchdog also treats the flat per-dataset `prebrick3` directory mtime as a
+cheap durable movement witness. Long PDMX/Giga chunks create derivative files
+well before their aggregate receipt is published; this prevents a healthy,
+actively converting chunk from being mislabeled `no_conversion_progress`.
+
 ## 2026-08-22 — Immutable EV1 preview snapshot seam
 
 Added a read-only snapshot builder for completed clean PDMX partitions plus
