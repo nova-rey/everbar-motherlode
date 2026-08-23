@@ -42,16 +42,21 @@ names = (
     "queue-gigamidi-after-pdmx-chunks.pid", "monitor-pdmx-giga.pid",
 )
 pids = {}
+pid_numbers = {}
 for name in names:
     path = root / "state" / name
     if not path.exists():
         pids[name] = False
+        pid_numbers[name] = None
         continue
     try:
-        os.kill(int(path.read_text().strip()), 0)
+        number = int(path.read_text().strip())
+        os.kill(number, 0)
         pids[name] = True
+        pid_numbers[name] = number
     except (OSError, ValueError):
         pids[name] = False
+        pid_numbers[name] = None
 
 progress_path = root / "progress" / "current.json"
 progress = {}
@@ -64,6 +69,7 @@ if progress_path.exists():
 converted = progress.get("live_converted_by_dataset") or {}
 print(json.dumps({
     "pids": pids,
+    "pid_numbers": pid_numbers,
     "progress_exists": progress_path.exists(),
     "progress_age_seconds": time.time() - progress_path.stat().st_mtime if progress_path.exists() else None,
     "state": progress.get("state"),
@@ -116,15 +122,22 @@ else:
         faults.append("no_dataset_worker_alive")
     if not probe.get("progress_exists"):
         faults.append("progress_receipt_missing")
-    elif probe.get("progress_age_seconds", float("inf")) > int(os.environ["MAX_PROGRESS_AGE"]):
-        faults.append("progress_receipt_stale")
+    # The monitor emits aggregate counts only after a durable chunk boundary.
+    # A long active Brick 3 chunk can legitimately outlive the receipt freshness
+    # budget, so liveness plus the independent two-hour movement guard below is
+    # the fail-closed stall signal rather than this observational age alone.
     if probe.get("state") not in ("RUNNING", "PARTIAL"):
         faults.append("unexpected_pipeline_state:" + str(probe.get("state")))
 
 count = int(probe.get("converted_streams") or 0)
 last_count = previous.get("last_count")
 last_progress_at = previous.get("last_progress_at", now)
-if not faults and last_count is not None:
+run_changed = previous.get("probe", {}).get("pid_numbers") != probe.get("pid_numbers")
+if run_changed:
+    # A Lightning stop/start replaces every scheduler PID while preserving
+    # completed shard receipts.  Start a fresh movement grace period.
+    last_progress_at = now
+elif not faults and last_count is not None:
     if count > int(last_count):
         last_progress_at = now
     elif now - int(last_progress_at) > int(os.environ["NO_PROGRESS_GRACE"]):

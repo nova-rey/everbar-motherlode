@@ -166,6 +166,15 @@ The detached health probe retries transient SSH failures three times before it
 escalates. One Lightning routing hiccup therefore cannot wake an expensive
 repair turn while healthy workers continue processing.
 
+Receipt age is now observational while the deterministic worker/controller set
+is alive: chunk-boundary publication can legitimately be older than fifteen
+minutes. The separate durable conversion-movement grace remains the stall
+alarm, avoiding false escalation during long valid Brick 3 chunks.
+
+The movement grace period now resets when Lightning resumes the scheduler with
+new PIDs. This distinguishes a safe receipt-preserving studio restart from a
+stalled active wave.
+
 ## 2026-08-22 — Immutable EV1 preview snapshot seam
 
 Added a read-only snapshot builder for completed clean PDMX partitions plus
