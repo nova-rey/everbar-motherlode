@@ -20,6 +20,21 @@ source "$config_path"
 : "${MOTHERLODE_SSH:?MOTHERLODE_SSH is required}"
 : "${MOTHERLODE_ROOT:?MOTHERLODE_ROOT is required}"
 
+# User services do not reliably inherit an interactive ssh-agent.  Prefer the
+# configured Lightning key so a valid running studio is not mislabeled as an
+# SSH outage merely because the watchdog lacks SSH_AUTH_SOCK.
+ssh_identity=${MOTHERLODE_SSH_IDENTITY:-"$HOME/.lightning/lightning_rsa"}
+ssh_options=(
+  -o BatchMode=yes
+  -o ConnectTimeout=15
+  -o ConnectionAttempts=3
+  -o ServerAliveInterval=15
+  -o ServerAliveCountMax=4
+)
+if [[ -r "$ssh_identity" ]]; then
+  ssh_options+=( -i "$ssh_identity" -o IdentitiesOnly=yes )
+fi
+
 state_dir=${WATCHDOG_STATE_DIR:-"$HOME/.local/state/everbar-motherlode-watchdog"}
 max_progress_age=${MAX_PROGRESS_AGE_SECONDS:-900}
 no_progress_grace=${NO_PROGRESS_GRACE_SECONDS:-7200}
@@ -101,7 +116,7 @@ PY
 remote_root=$(printf '%q' "$MOTHERLODE_ROOT")
 raw=''
 for attempt in 1 2 3; do
-  if raw=$(ssh -o BatchMode=yes -o ConnectTimeout=15 "$MOTHERLODE_SSH" "MOTHERLODE_ROOT=$remote_root python3 - <<'PY'
+  if raw=$(ssh "${ssh_options[@]}" "$MOTHERLODE_SSH" "MOTHERLODE_ROOT=$remote_root python3 - <<'PY'
 $probe
 PY" 2>/dev/null); then
     break

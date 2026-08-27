@@ -203,3 +203,11 @@ exact within-POP909 dedupe and source-piece splits, profiles Brick 4 caps, and
 materializes a clearly non-production packed training view. The path records
 source/license/revision evidence and has no access to Motherlode's central
 production state.
+
+## 2026-08-27 — Deterministic Lightning watchdog SSH identity
+
+The Motherlode watchdog now explicitly uses the configured Lightning private
+key with bounded connection attempts and keepalives. Systemd user services do
+not reliably inherit an interactive ssh-agent; this change prevents a healthy
+studio from being reported as unavailable solely because `SSH_AUTH_SOCK` is
+absent. It does not modify runner or corpus semantics.
