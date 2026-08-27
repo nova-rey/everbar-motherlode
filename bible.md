@@ -211,3 +211,9 @@ key with bounded connection attempts and keepalives. Systemd user services do
 not reliably inherit an interactive ssh-agent; this change prevents a healthy
 studio from being reported as unavailable solely because `SSH_AUTH_SOCK` is
 absent. It does not modify runner or corpus semantics.
+## 2026-08-27 — Reliable PDMX worker heartbeat
+
+Added a receipt-safe worker liveness monitor. It only writes an atomic
+heartbeat from durable worker PID receipts; it neither claims shard completion
+nor changes shard assignment. The PDMX workers remain responsible for skipping
+only `COMPLETE` receipts when resumed.
