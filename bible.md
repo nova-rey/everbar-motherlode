@@ -217,3 +217,11 @@ Added a receipt-safe worker liveness monitor. It only writes an atomic
 heartbeat from durable worker PID receipts; it neither claims shard completion
 nor changes shard assignment. The PDMX workers remain responsible for skipping
 only `COMPLETE` receipts when resumed.
+
+## 2026-08-28 — Watchdog supervisor receipt-name compatibility
+
+The Motherlode watchdog now recognizes the receipt-safe current supervisor PID
+names (`queue-gigamidi-after-pdmx.pid` and `monitor-pdmx-workers.pid`) while
+retaining the historical aliases for older live deployments. This fixes false
+`wave_controller_dead` and `progress_monitor_dead` alerts without changing
+corpus work, shard ownership, or completion semantics.

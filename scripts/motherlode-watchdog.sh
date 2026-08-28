@@ -54,6 +54,10 @@ names = (
     "pdmx-chunk-worker-2.pid", "pdmx-chunk-worker-3.pid",
     "gigamidi-chunk-worker-0.pid", "gigamidi-chunk-worker-1.pid",
     "gigamidi-chunk-worker-2.pid", "gigamidi-chunk-worker-3.pid",
+    # The current receipt-safe supervisor names.  The two legacy names below
+    # remain supported so an older already-running deployment is not falsely
+    # declared dead during a tooling upgrade.
+    "queue-gigamidi-after-pdmx.pid", "monitor-pdmx-workers.pid",
     "queue-gigamidi-after-pdmx-chunks.pid", "monitor-pdmx-giga.pid",
 )
 pids = {}
@@ -147,9 +151,15 @@ if probe.get("probe_error"):
 else:
     pids = probe.get("pids") or {}
     workers = any(alive for name, alive in pids.items() if name.startswith(("pdmx-", "gigamidi-")))
-    if not pids.get("queue-gigamidi-after-pdmx-chunks.pid"):
+    if not (
+        pids.get("queue-gigamidi-after-pdmx.pid")
+        or pids.get("queue-gigamidi-after-pdmx-chunks.pid")
+    ):
         faults.append("wave_controller_dead")
-    if not pids.get("monitor-pdmx-giga.pid"):
+    if not (
+        pids.get("monitor-pdmx-workers.pid")
+        or pids.get("monitor-pdmx-giga.pid")
+    ):
         faults.append("progress_monitor_dead")
     if not workers:
         faults.append("no_dataset_worker_alive")
