@@ -52,6 +52,11 @@ root = Path(os.environ["MOTHERLODE_ROOT"])
 names = (
     "pdmx-chunk-worker-0.pid", "pdmx-chunk-worker-1.pid",
     "pdmx-chunk-worker-2.pid", "pdmx-chunk-worker-3.pid",
+    # Current interrupted-studio recovery workers.  They retain the same
+    # receipt authority as the historical chunk workers but use a distinct
+    # name so a restart cannot mistake a stale old PID for live work.
+    "pdmx-resume-worker-v2-0.pid", "pdmx-resume-worker-v2-1.pid",
+    "pdmx-resume-worker-v2-2.pid", "pdmx-resume-worker-v2-3.pid",
     "gigamidi-chunk-worker-0.pid", "gigamidi-chunk-worker-1.pid",
     "gigamidi-chunk-worker-2.pid", "gigamidi-chunk-worker-3.pid",
     # The current receipt-safe supervisor names.  The two legacy names below
@@ -59,6 +64,7 @@ names = (
     # declared dead during a tooling upgrade.
     "queue-gigamidi-after-pdmx.pid", "monitor-pdmx-workers.pid",
     "queue-gigamidi-after-pdmx-chunks.pid", "monitor-pdmx-giga.pid",
+    "pdmx-resume-monitor-v2.pid",
 )
 pids = {}
 pid_numbers = {}
@@ -151,14 +157,20 @@ if probe.get("probe_error"):
 else:
     pids = probe.get("pids") or {}
     workers = any(alive for name, alive in pids.items() if name.startswith(("pdmx-", "gigamidi-")))
-    if not (
+    wave_controller_alive = (
         pids.get("queue-gigamidi-after-pdmx.pid")
         or pids.get("queue-gigamidi-after-pdmx-chunks.pid")
-    ):
+    )
+    # A controller is only expected while it is needed to move between waves.
+    # During an active receipt-safe PDMX recovery, live workers themselves are
+    # the authoritative current wave; alerting for a deliberately absent
+    # hand-off controller merely produces false pages.
+    if not wave_controller_alive and not workers:
         faults.append("wave_controller_dead")
     if not (
         pids.get("monitor-pdmx-workers.pid")
         or pids.get("monitor-pdmx-giga.pid")
+        or pids.get("pdmx-resume-monitor-v2.pid")
     ):
         faults.append("progress_monitor_dead")
     if not workers:

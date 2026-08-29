@@ -225,3 +225,10 @@ names (`queue-gigamidi-after-pdmx.pid` and `monitor-pdmx-workers.pid`) while
 retaining the historical aliases for older live deployments. This fixes false
 `wave_controller_dead` and `progress_monitor_dead` alerts without changing
 corpus work, shard ownership, or completion semantics.
+## 2026-08-29 — Receipt-safe PDMX recovery watchdog compatibility
+
+The Motherlode watchdog now recognizes the `pdmx-resume-worker-v2-*` and
+`pdmx-resume-monitor-v2` runtime names used after a Lightning studio restart.
+An absent next-wave controller is no longer considered a failure while a live
+receipt-safe PDMX recovery wave is actively processing durable, incomplete
+partitions. Completion receipts remain the sole shard-resume authority.
