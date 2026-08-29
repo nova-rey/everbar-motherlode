@@ -188,3 +188,20 @@ def attach_projection(rows: Iterable[FeatureRow], projection_rows: Iterable[Any]
                                  row.dataset_id, row.split, {**row.values, "lifecycle": lifecycle},
                                  row.missing, row.confidence, row.extractor_id))
     return result
+
+
+def write_feature_view(rows: Iterable[FeatureRow], output_dir: Any) -> dict[str, Any]:
+    """Persist rows and characterization with content-addressed metadata."""
+    output_dir = __import__("pathlib").Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    ordered = [row.to_dict() for row in rows]
+    payload = "".join(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n" for row in ordered)
+    (output_dir / "features.jsonl").write_text(payload)
+    report = characterize([FeatureRow(**row) for row in ordered])
+    (output_dir / "characterization.json").write_text(json.dumps(report, sort_keys=True, indent=2) + "\n")
+    manifest = {"schema": EXTRACTOR_SCHEMA, "row_count": len(ordered),
+                "features_sha256": hashlib.sha256(payload.encode()).hexdigest(),
+                "characterization_sha256": report["hash"]}
+    manifest["manifest_sha256"] = hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    (output_dir / "manifest.json").write_text(json.dumps(manifest, sort_keys=True, indent=2) + "\n")
+    return manifest

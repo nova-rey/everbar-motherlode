@@ -4,9 +4,11 @@ from pathlib import Path
 from .core import config, init, merge_shards, monitor, prefetch, preflight, progress, run, sample_brick3, shard, writej
 from .distributed import distributed_shard, verify_distributed_run
 from .feature_base import backfill_canonical, extract_primitive_features
+from .v2_features import extract_rows, write_feature_view
+from .v2_projection import project_stream, write_projection
 def main(argv=None):
  p=argparse.ArgumentParser(); sub=p.add_subparsers(dest="cmd",required=True)
- for x in ("preflight","build","status","reconcile","prefetch","monitor","shard","merge-shards","sample-brick3","distributed-shard","verify-distributed-run","backfill-canonical","extract-features"): q=sub.add_parser(x); q.add_argument("--root",type=Path,required=True); q.add_argument("--config",type=Path,default=Path("configs/motherlode-v1.toml")); q.add_argument("--resume",action="store_true"); q.add_argument("--detach",action="store_true")
+ for x in ("preflight","build","status","reconcile","prefetch","monitor","shard","merge-shards","sample-brick3","distributed-shard","verify-distributed-run","backfill-canonical","extract-features","project-v2","characterize-v2"): q=sub.add_parser(x); q.add_argument("--root",type=Path,required=True); q.add_argument("--config",type=Path,default=Path("configs/motherlode-v1.toml")); q.add_argument("--resume",action="store_true"); q.add_argument("--detach",action="store_true")
  p_snapshot=sub.add_parser("snapshot-preview"); p_snapshot.add_argument("--motherlode-root",type=Path,required=True); p_snapshot.add_argument("--output-root",type=Path,required=True); p_snapshot.add_argument("--everbar-checkout",type=Path,required=True); p_snapshot.add_argument("--motherlode-sha",required=True)
  p_prefetch=sub.choices["prefetch"]; p_prefetch.add_argument("--workers",type=int,default=3)
  p_monitor=sub.choices["monitor"]; p_monitor.add_argument("--interval",type=int,default=300); p_monitor.add_argument("--pid",type=int)
@@ -15,6 +17,8 @@ def main(argv=None):
  p_distributed=sub.choices["distributed-shard"]; p_distributed.add_argument("--dataset",required=True); p_distributed.add_argument("--shard-index",type=int,required=True); p_distributed.add_argument("--shard-count",type=int,required=True); p_distributed.add_argument("--run-id",required=True); p_distributed.add_argument("--input-uri",default=""); p_distributed.add_argument("--output-uri",required=True); p_distributed.add_argument("--force",action="store_true")
  p_verify=sub.choices["verify-distributed-run"]; p_verify.add_argument("--dataset",required=True); p_verify.add_argument("--shard-count",type=int,required=True); p_verify.add_argument("--run-id",required=True); p_verify.add_argument("--output-uri",required=True)
  p_features=sub.choices["extract-features"]; p_features.add_argument("--extractor-id",default="primitive-v1")
+ p_project=sub.choices["project-v2"]; p_project.add_argument("--canonical-db",type=Path,required=True); p_project.add_argument("--output-dir",type=Path,required=True)
+ p_characterize=sub.choices["characterize-v2"]; p_characterize.add_argument("--canonical-db",type=Path,required=True); p_characterize.add_argument("--output-dir",type=Path,required=True)
  a=p.parse_args(argv)
  if a.cmd=="snapshot-preview":
   from .snapshot import build
@@ -50,6 +54,15 @@ def main(argv=None):
   report=verify_distributed_run(a.output_uri,a.run_id,a.dataset,a.shard_count); print(__import__('json').dumps(report,indent=2)); return 0 if report["state"] == "COMPLETE" else 1
  if a.cmd=="backfill-canonical": print(__import__('json').dumps(backfill_canonical(a.root),indent=2)); return 0
  if a.cmd=="extract-features": print(__import__('json').dumps(extract_primitive_features(a.root,a.extractor_id),indent=2)); return 0
+ if a.cmd=="project-v2":
+  conn=__import__('sqlite3').connect(f"file:{a.canonical_db}?mode=ro", uri=True)
+  rows=[]; segments=[]
+  for (stream_id,) in conn.execute("select stream_id from canonical_streams order by stream_id"):
+   projected, found=project_stream(conn, stream_id); rows.extend(projected); segments.extend(found)
+  conn.close(); print(__import__('json').dumps(write_projection(rows, segments, a.output_dir), indent=2, sort_keys=True)); return 0
+ if a.cmd=="characterize-v2":
+  conn=__import__('sqlite3').connect(f"file:{a.canonical_db}?mode=ro", uri=True); rows=extract_rows(conn); conn.close()
+  print(__import__('json').dumps(write_feature_view(rows, a.output_dir), indent=2, sort_keys=True)); return 0
  init(a.root,cfg)
  if a.detach:
   log=a.root/"logs"/"build.log"; f=log.open("a"); child=subprocess.Popen([sys.executable,"-m","everbar_motherlode.cli","build","--root",str(a.root),"--config",str(a.config.resolve()),"--resume"],stdout=f,stderr=subprocess.STDOUT,start_new_session=True)

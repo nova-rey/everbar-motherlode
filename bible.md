@@ -241,3 +241,7 @@ source-compositional lifecycle positions, four-span eligibility, and fifteen
 versioned candidate controls are covered by synthetic tests. Canonical tables
 and source artifacts remain unchanged; characterization remains provisional
 until an authoritative preview snapshot is available.
+
+The V2 CLI now exposes explicit read-only `project-v2` and `characterize-v2`
+commands for these derived views; they require a caller-supplied canonical
+SQLite path and never infer or download corpus authority.
