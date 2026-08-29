@@ -232,3 +232,12 @@ The Motherlode watchdog now recognizes the `pdmx-resume-worker-v2-*` and
 An absent next-wave controller is no longer considered a failure while a live
 receipt-safe PDMX recovery wave is actively processing durable, incomplete
 partitions. Completion receipts remain the sole shard-resume authority.
+
+## 2026-08-29 — V2 live projection and candidate features
+
+Added read-only V2 projection and candidate-feature modules over canonical
+SQLite. Sustain-aware half-open bar occupancy, maximal live segments, original
+source-compositional lifecycle positions, four-span eligibility, and fifteen
+versioned candidate controls are covered by synthetic tests. Canonical tables
+and source artifacts remain unchanged; characterization remains provisional
+until an authoritative preview snapshot is available.
