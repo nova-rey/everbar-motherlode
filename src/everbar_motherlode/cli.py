@@ -18,7 +18,7 @@ def main(argv=None):
  p_verify=sub.choices["verify-distributed-run"]; p_verify.add_argument("--dataset",required=True); p_verify.add_argument("--shard-count",type=int,required=True); p_verify.add_argument("--run-id",required=True); p_verify.add_argument("--output-uri",required=True)
  p_features=sub.choices["extract-features"]; p_features.add_argument("--extractor-id",default="primitive-v1")
  p_project=sub.choices["project-v2"]; p_project.add_argument("--canonical-db",type=Path,required=True); p_project.add_argument("--output-dir",type=Path,required=True)
- p_characterize=sub.choices["characterize-v2"]; p_characterize.add_argument("--canonical-db",type=Path,required=True); p_characterize.add_argument("--output-dir",type=Path,required=True)
+ p_characterize=sub.choices["characterize-v2"]; p_characterize.add_argument("--canonical-db",type=Path,required=True); p_characterize.add_argument("--output-dir",type=Path,required=True); p_characterize.add_argument("--limit-streams",type=int)
  a=p.parse_args(argv)
  if a.cmd=="snapshot-preview":
   from .snapshot import build
@@ -61,7 +61,9 @@ def main(argv=None):
    projected, found=project_stream(conn, stream_id); rows.extend(projected); segments.extend(found)
   conn.close(); print(__import__('json').dumps(write_projection(rows, segments, a.output_dir), indent=2, sort_keys=True)); return 0
  if a.cmd=="characterize-v2":
-  conn=__import__('sqlite3').connect(f"file:{a.canonical_db}?mode=ro", uri=True); rows=extract_rows(conn); conn.close()
+  conn=__import__('sqlite3').connect(f"file:{a.canonical_db}?mode=ro", uri=True)
+  ids=None if a.limit_streams is None else [row[0] for row in conn.execute("select stream_id from canonical_streams order by stream_id limit ?", (a.limit_streams,))]
+  rows=extract_rows(conn, stream_ids=ids); conn.close()
   print(__import__('json').dumps(write_feature_view(rows, a.output_dir), indent=2, sort_keys=True)); return 0
  init(a.root,cfg)
  if a.detach:

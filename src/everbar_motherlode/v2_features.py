@@ -134,16 +134,28 @@ def _bar_values(notes: Sequence[tuple[int, int, int, int]], start: int, end: int
     }
 
 
-def extract_rows(conn: sqlite3.Connection, *, split_by_stream: dict[str, str] | None = None) -> list[FeatureRow]:
+def extract_rows(conn: sqlite3.Connection, *, split_by_stream: dict[str, str] | None = None,
+                 stream_ids: Sequence[str] | None = None) -> list[FeatureRow]:
     """Extract all candidate rows from canonical tables in deterministic order."""
     stream_rows = conn.execute("select stream_id,source_piece_id,source_track_id,dataset_id from canonical_streams order by stream_id").fetchall()
+    if stream_ids is not None:
+        selected = set(stream_ids)
+        stream_rows = [row for row in stream_rows if str(row[0]) in selected]
     result: list[FeatureRow] = []
     for stream_id, piece, track, dataset in stream_rows:
         notes = conn.execute("select onset_tick,duration_ticks,pitch,velocity from canonical_notes where stream_id=? order by note_index", (stream_id,)).fetchall()
-        for bar, start, end, numerator, denominator, beats, _empty in conn.execute(
-            "select bar_index,start_tick,end_tick,numerator,denominator,beats,is_empty from canonical_bars where stream_id=? order by bar_index", (stream_id,)
-        ):
-            values = _bar_values(notes, int(start), int(end), float(beats), int(numerator), int(denominator))
+        bars = conn.execute(
+            "select bar_index,start_tick,end_tick,numerator,denominator,beats,is_empty from canonical_bars "
+            "where stream_id=? order by bar_index", (stream_id,)
+        ).fetchall()
+        cursor = 0
+        active: list[tuple[int, int, int, int]] = []
+        for bar, start, end, numerator, denominator, beats, _empty in bars:
+            start, end = int(start), int(end)
+            active = [note for note in active if note[0] + note[1] > start]
+            while cursor < len(notes) and int(notes[cursor][0]) < end:
+                active.append(tuple(int(value) for value in notes[cursor])); cursor += 1
+            values = _bar_values(active, start, end, float(beats), int(numerator), int(denominator))
             values["lifecycle"] = {"source_bar_index": int(bar), "source_bar_count": 0,
                                     "source_position": None, "segment_id": None, "segment_position": None}
             missing = {name: values.get(name) is None for name in CONTROL_NAMES}

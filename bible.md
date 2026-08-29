@@ -242,6 +242,12 @@ versioned candidate controls are covered by synthetic tests. Canonical tables
 and source artifacts remain unchanged; characterization remains provisional
 until an authoritative preview snapshot is available.
 
+The extractor was optimized to sweep each stream's notes once across ordered
+bars and supports bounded stream selection for CPU probes; a 100-stream probe
+completed in 0.73 seconds and produced deterministic feature and
+characterization hashes. This remains non-authoritative because the approved
+30k preview snapshot is not present on this host.
+
 The V2 CLI now exposes explicit read-only `project-v2` and `characterize-v2`
 commands for these derived views; they require a caller-supplied canonical
 SQLite path and never infer or download corpus authority.
