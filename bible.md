@@ -267,3 +267,8 @@ writers, and a query-only canonical SQLite opener for derived V2 projection
 and feature artifacts. Projection and feature views now bind their files and
 canonical identity without mutating Motherlode authority; synthetic tests
 cover read-only enforcement and reproducibility. No preview corpus was built.
+
+The authority-gated `build-v2-sidecar` command now validates the exact frozen
+V1 manifest and mmap array shapes before creating projection and feature
+sidecars. It fails before output creation when the base snapshot is missing or
+wrong; no snapshot reconstruction path was added.
