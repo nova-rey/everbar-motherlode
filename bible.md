@@ -246,6 +246,10 @@ Feature extraction now computes polyphonic-time fraction from interval sweep
 state rather than a stream-wide maximum, and the CLI can attach the persisted
 projection rows before writing feature views.
 
+Updated the canonical-feature documentation with the V2 projection and
+candidate-control boundaries. No production snapshot, conditioning schema, or
+canonical-table mutation was introduced.
+
 The extractor was optimized to sweep each stream's notes once across ordered
 bars and supports bounded stream selection for CPU probes; a 100-stream probe
 completed in 0.73 seconds and produced deterministic feature and

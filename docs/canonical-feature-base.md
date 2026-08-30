@@ -51,6 +51,21 @@ Later extractors (`articulation-v1`, `repetition-v1`, or a V2 cross-track
 extractor) use another extractor ID/database. Replacing them never changes
 Brick 3 receipts, canonical stream IDs, dedupe identities, or provenance.
 
+## V2 live projection and candidate controls
+
+`everbar_motherlode.v2_projection` derives live segments from the canonical
+tables using sustain-aware half-open occupancy. Empty bars are retained as
+boundary witnesses; lifecycle positions retain the original source bar index,
+count, and normalized position. `eligible_four_span_windows` excludes windows
+that cross a silent boundary or do not contain four represented spans.
+
+`everbar_motherlode.v2_features` emits the fifteen ordered candidate controls
+defined by the approved V2 plan, including raw supporting measurements and
+lifecycle fields. It is versioned and deterministic, supports projection
+attachment, and writes replaceable feature/characterization views. Candidate
+status is provisional until the authoritative preview is characterized; the
+module does not freeze a conditioning schema.
+
 For V2, join `canonical_streams.source_piece_id` to `source_tracks` and the
 stored sibling IDs. V1 uses one stream; it does not erase its original ensemble
 or percussion authority.
