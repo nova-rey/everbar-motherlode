@@ -30,15 +30,26 @@ def _sha256(path: Path) -> str:
 
 
 def validate_base_snapshot(snapshot: str | Path) -> dict[str, Any]:
-    """Fail closed unless the exact frozen V1 preview payload is present."""
+    """Fail closed for either exact V1 authority or an explicitly named V2 preview."""
     root = Path(snapshot)
     root_manifest = root / "manifest.json"
-    corpus_manifest = root / "canonical" / "manifest.json"
     arrays = (root / "training" / "input_ids.npy", root / "training" / "active_mask.npy")
-    missing = [str(path) for path in (root_manifest, corpus_manifest, *arrays) if not path.is_file()]
+    missing = [str(path) for path in (root_manifest, *arrays) if not path.is_file()]
     if missing:
         raise FileNotFoundError("V1 authority is incomplete: " + ", ".join(missing))
     root_hash = _sha256(root_manifest)
+    manifest = json.loads(root_manifest.read_text())
+    if manifest.get("schema") == "everbar-motherlode.v2-development-preview/v1":
+        shapes = [tuple(__import__("numpy").load(path, mmap_mode="r").shape) for path in arrays]
+        expected = tuple(manifest["training_view_shape"]) if manifest.get("training_view_shape") else shapes[0]
+        if shapes[0] != shapes[1] or shapes[0] != expected:
+            raise ValueError(f"V2 packed array shape mismatch: {shapes}")
+        return {"snapshot_name": root.name, "path": str(root), "root_manifest_sha256": root_hash,
+                "semantic_corpus_hash": manifest.get("semantic_corpus_hash"), "array_shapes": [list(shape) for shape in shapes],
+                "authority_kind": manifest.get("authority_kind"), "scope": manifest.get("scope")}
+    corpus_manifest = root / "canonical" / "manifest.json"
+    if not corpus_manifest.is_file():
+        raise FileNotFoundError(f"V1 authority is incomplete: {corpus_manifest}")
     corpus_hash = _sha256(corpus_manifest)
     if root_hash != EXPECTED_ROOT_MANIFEST_SHA256:
         raise ValueError(f"V1 root manifest identity mismatch: {root_hash}")

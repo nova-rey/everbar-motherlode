@@ -10,7 +10,7 @@ from .v2_projection import project_stream, write_projection
 def main(argv=None):
  p=argparse.ArgumentParser(); sub=p.add_subparsers(dest="cmd",required=True)
  for x in ("preflight","build","status","reconcile","prefetch","monitor","shard","merge-shards","sample-brick3","distributed-shard","verify-distributed-run","backfill-canonical","extract-features","project-v2","characterize-v2"): q=sub.add_parser(x); q.add_argument("--root",type=Path,required=True); q.add_argument("--config",type=Path,default=Path("configs/motherlode-v1.toml")); q.add_argument("--resume",action="store_true"); q.add_argument("--detach",action="store_true")
- p_snapshot=sub.add_parser("snapshot-preview"); p_snapshot.add_argument("--motherlode-root",type=Path,required=True); p_snapshot.add_argument("--output-root",type=Path,required=True); p_snapshot.add_argument("--everbar-checkout",type=Path,required=True); p_snapshot.add_argument("--motherlode-sha",required=True)
+ p_snapshot=sub.add_parser("snapshot-preview"); p_snapshot.add_argument("--motherlode-root",type=Path,required=True); p_snapshot.add_argument("--output-root",type=Path,required=True); p_snapshot.add_argument("--everbar-checkout",type=Path,required=True); p_snapshot.add_argument("--motherlode-sha",required=True); p_snapshot.add_argument("--snapshot-name"); p_snapshot.add_argument("--snapshot-scope",default="EV1_PREVIEW_ONLY"); p_snapshot.add_argument("--everbar-sha")
  p_sidecar=sub.add_parser("build-v2-sidecar"); p_sidecar.add_argument("--base-snapshot",type=Path,required=True); p_sidecar.add_argument("--canonical-db",type=Path,required=True); p_sidecar.add_argument("--output-dir",type=Path,required=True)
  p_prefetch=sub.choices["prefetch"]; p_prefetch.add_argument("--workers",type=int,default=3)
  p_monitor=sub.choices["monitor"]; p_monitor.add_argument("--interval",type=int,default=300); p_monitor.add_argument("--pid",type=int)
@@ -24,7 +24,7 @@ def main(argv=None):
  a=p.parse_args(argv)
  if a.cmd=="snapshot-preview":
   from .snapshot import build
-  print(__import__('json').dumps(build(motherlode_root=a.motherlode_root,output_root=a.output_root,everbar_checkout=a.everbar_checkout,motherlode_sha=a.motherlode_sha),indent=2)); return 0
+  print(__import__('json').dumps(build(motherlode_root=a.motherlode_root,output_root=a.output_root,everbar_checkout=a.everbar_checkout,motherlode_sha=a.motherlode_sha,snapshot_name=a.snapshot_name,snapshot_scope=a.snapshot_scope,everbar_sha=a.everbar_sha),indent=2)); return 0
  if a.cmd=="build-v2-sidecar":
   from .v2_sidecar import build_derived_sidecar
   print(__import__('json').dumps(build_derived_sidecar(base_snapshot=a.base_snapshot, canonical_db=a.canonical_db, output_dir=a.output_dir), indent=2, sort_keys=True)); return 0

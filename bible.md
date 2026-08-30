@@ -280,3 +280,13 @@ bar_index)` and rejects ambiguous streamless matches when multiple streams
 share bar indices. This preserves the synthetic single-stream interface while
 preventing cross-stream fallback from contaminating source-family or segment
 identity. Focused V2 projection, artifact, and sidecar tests pass.
+
+## 2026-08-30 — V2 development preview authority
+
+Accepted the historical snapshot loss and selected Option C on the
+provenance-rich POP909 POC authority. Built the new immutable
+`ev2-dev-preview-pop909-poc-v1` with fresh membership, semantic, manifest, and
+packed-view identities; it is explicitly not the historical V1 snapshot.
+Added V2-aware sidecar validation and recorded the re-audit checkpoint. The
+development preview preflight and Motherlode suite pass; candidate control
+formulas remain unaccepted pending characterization evidence.
