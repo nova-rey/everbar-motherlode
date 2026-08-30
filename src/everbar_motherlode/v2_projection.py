@@ -98,13 +98,32 @@ def eligible_four_span_windows(
     """
     if window_size <= 0:
         raise ValueError("window_size must be positive")
-    by_bar = {row.bar_index: row for row in projected}
+    # A bar index is only unique within a stream.  Keep the legacy synthetic
+    # single-stream input (which omits ``stream_id``) usable, but refuse to
+    # guess when an omitted stream id would make a cross-stream match
+    # ambiguous.
+    by_key = {(row.stream_id, row.bar_index): row for row in projected}
+    by_bar: dict[int, list[LiveBar]] = {}
+    for row in projected:
+        by_bar.setdefault(row.bar_index, []).append(row)
     spans = sorted(represented_spans, key=lambda row: int(row["span_index"]))
     result: list[dict[str, object]] = []
     for offset in range(max(0, len(spans) - window_size + 1)):
         window = spans[offset:offset + window_size]
-        rows = [by_bar.get(int(item["bar_index"])) for item in window]
+        rows: list[LiveBar | None] = []
+        for item in window:
+            bar_index = int(item["bar_index"])
+            stream_id = item.get("stream_id")
+            if stream_id is not None:
+                row = by_key.get((str(stream_id), bar_index))
+            else:
+                matches = by_bar.get(bar_index, [])
+                row = matches[0] if len(matches) == 1 else None
+            rows.append(row)
         if any(row is None or not row.occupied for row in rows):
+            continue
+        stream_ids = {row.stream_id for row in rows if row is not None}
+        if len(stream_ids) != 1:
             continue
         segment_ids = {row.segment_id for row in rows}
         if len(segment_ids) != 1:

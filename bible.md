@@ -272,3 +272,11 @@ The authority-gated `build-v2-sidecar` command now validates the exact frozen
 V1 manifest and mmap array shapes before creating projection and feature
 sidecars. It fails before output creation when the base snapshot is missing or
 wrong; no snapshot reconstruction path was added.
+
+## 2026-08-30 — V2 projection stream-scoped window matching
+
+V2 eligible-window matching now keys projected bars by `(stream_id,
+bar_index)` and rejects ambiguous streamless matches when multiple streams
+share bar indices. This preserves the synthetic single-stream interface while
+preventing cross-stream fallback from contaminating source-family or segment
+identity. Focused V2 projection, artifact, and sidecar tests pass.

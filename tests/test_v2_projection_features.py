@@ -38,6 +38,37 @@ def test_projection_requires_one_live_segment_for_four_span_window():
     assert eligible_four_span_windows(rows, spans) == []
 
 
+def test_projection_window_matching_is_stream_scoped():
+    db = _db()
+    first, _ = project_stream(db, "s")
+    second = [
+        type(row)("other", row.bar_index, row.start_tick, row.end_tick, True,
+                  "other:segment", row.segment_position, row.bar_index,
+                  row.source_bar_count, row.source_position)
+        for row in first
+    ]
+    spans = [
+        {"stream_id": "s", "span_index": i, "bar_index": i}
+        for i in range(4)
+    ]
+    # The empty bar in stream s still prevents this window.  A second stream
+    # with the same bar indices must not be selected as a fallback.
+    assert eligible_four_span_windows(first + second, spans) == []
+
+
+def test_projection_rejects_ambiguous_streamless_bar_indices():
+    db = _db()
+    first, _ = project_stream(db, "s")
+    second = [
+        type(row)("other", row.bar_index, row.start_tick, row.end_tick, row.occupied,
+                  row.segment_id, row.segment_position, row.source_bar_index,
+                  row.source_bar_count, row.source_position)
+        for row in first
+    ]
+    spans = [{"span_index": i, "bar_index": i} for i in range(4)]
+    assert eligible_four_span_windows(first + second, spans) == []
+
+
 def test_candidate_features_are_versioned_and_characterizable():
     db = _db(); rows = extract_rows(db, split_by_stream={"s": "train"})
     assert len(rows) == 4
