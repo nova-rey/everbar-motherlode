@@ -242,6 +242,10 @@ versioned candidate controls are covered by synthetic tests. Canonical tables
 and source artifacts remain unchanged; characterization remains provisional
 until an authoritative preview snapshot is available.
 
+Feature extraction now computes polyphonic-time fraction from interval sweep
+state rather than a stream-wide maximum, and the CLI can attach the persisted
+projection rows before writing feature views.
+
 The extractor was optimized to sweep each stream's notes once across ordered
 bars and supports bounded stream selection for CPU probes; a 100-stream probe
 completed in 0.73 seconds and produced deterministic feature and

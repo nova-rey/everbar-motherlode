@@ -60,12 +60,14 @@ def _interval_stats(notes: Sequence[tuple[int, int, int, int]], start: int, end:
         left, right = max(start, onset), min(end, onset + duration)
         if left < right:
             boundaries.extend(((left, 1), (right, -1)))
-    active = max_active = occupied = 0
+    active = max_active = occupied = polyphonic = 0
     previous = start
     for tick, delta in sorted(boundaries, key=lambda item: (item[0], item[1])):
         if tick > previous:
             if active:
                 occupied += tick - previous
+            if active >= 2:
+                polyphonic += tick - previous
             previous = tick
             max_active = max(max_active, active)
         active += delta
@@ -73,14 +75,14 @@ def _interval_stats(notes: Sequence[tuple[int, int, int, int]], start: int, end:
     if previous < end and active:
         occupied += end - previous
     length = end - start
-    return (occupied / length if length else 0.0, max_active, float(max_active))
+    return (occupied / length if length else 0.0, max_active, polyphonic / length if length else 0.0)
 
 
 def _bar_values(notes: Sequence[tuple[int, int, int, int]], start: int, end: int, beats: float,
                 numerator: int, denominator: int) -> dict[str, Any]:
     local = sorted((n for n in notes if start <= n[0] < end), key=lambda n: (n[0], n[2], n[3]))
     onsets = sorted({n[0] for n in local})
-    occupied, maximum, _ = _interval_stats(notes, start, end)
+    occupied, maximum, polyphonic_fraction = _interval_stats(notes, start, end)
     sounding = [(max(start, n[0]), min(end, n[0] + n[1]), n[2]) for n in notes
                 if n[0] < end and n[0] + n[1] > start]
     voices = sum((right - left) for left, right, _ in sounding) / (end - start) if end > start else 0.0
@@ -111,7 +113,7 @@ def _bar_values(notes: Sequence[tuple[int, int, int, int]], start: int, end: int
     return {
         "rhythmic_density": len(onsets) / beats if beats else 0.0,
         "polyphony": {"time_weighted_voices": voices, "max_voices": maximum,
-                      "polyphonic_time_fraction": sum(right - left for left, right, _ in sounding if maximum > 1) / (end - start) if end > start else 0.0},
+                      "polyphonic_time_fraction": polyphonic_fraction},
         "occupancy": occupied,
         "articulation": {"median_duration_to_next_onset": median(articulation) if articulation else None,
                           "durations": durations, "iois": iois, "overlap_count": overlap_count},

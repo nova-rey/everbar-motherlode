@@ -4,7 +4,7 @@ from pathlib import Path
 from .core import config, init, merge_shards, monitor, prefetch, preflight, progress, run, sample_brick3, shard, writej
 from .distributed import distributed_shard, verify_distributed_run
 from .feature_base import backfill_canonical, extract_primitive_features
-from .v2_features import extract_rows, write_feature_view
+from .v2_features import attach_projection, extract_rows, write_feature_view
 from .v2_projection import project_stream, write_projection
 def main(argv=None):
  p=argparse.ArgumentParser(); sub=p.add_subparsers(dest="cmd",required=True)
@@ -18,7 +18,7 @@ def main(argv=None):
  p_verify=sub.choices["verify-distributed-run"]; p_verify.add_argument("--dataset",required=True); p_verify.add_argument("--shard-count",type=int,required=True); p_verify.add_argument("--run-id",required=True); p_verify.add_argument("--output-uri",required=True)
  p_features=sub.choices["extract-features"]; p_features.add_argument("--extractor-id",default="primitive-v1")
  p_project=sub.choices["project-v2"]; p_project.add_argument("--canonical-db",type=Path,required=True); p_project.add_argument("--output-dir",type=Path,required=True)
- p_characterize=sub.choices["characterize-v2"]; p_characterize.add_argument("--canonical-db",type=Path,required=True); p_characterize.add_argument("--output-dir",type=Path,required=True); p_characterize.add_argument("--limit-streams",type=int)
+ p_characterize=sub.choices["characterize-v2"]; p_characterize.add_argument("--canonical-db",type=Path,required=True); p_characterize.add_argument("--output-dir",type=Path,required=True); p_characterize.add_argument("--limit-streams",type=int); p_characterize.add_argument("--projection-dir",type=Path)
  a=p.parse_args(argv)
  if a.cmd=="snapshot-preview":
   from .snapshot import build
@@ -64,6 +64,11 @@ def main(argv=None):
   conn=__import__('sqlite3').connect(f"file:{a.canonical_db}?mode=ro", uri=True)
   ids=None if a.limit_streams is None else [row[0] for row in conn.execute("select stream_id from canonical_streams order by stream_id limit ?", (a.limit_streams,))]
   rows=extract_rows(conn, stream_ids=ids); conn.close()
+  if a.projection_dir is not None:
+   from types import SimpleNamespace
+   projection_path=a.projection_dir / "bars.jsonl"
+   projection=[SimpleNamespace(**__import__('json').loads(line)) for line in projection_path.read_text().splitlines()]
+   rows=attach_projection(rows, projection)
   print(__import__('json').dumps(write_feature_view(rows, a.output_dir), indent=2, sort_keys=True)); return 0
  init(a.root,cfg)
  if a.detach:
