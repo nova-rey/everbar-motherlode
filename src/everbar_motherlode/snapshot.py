@@ -165,7 +165,7 @@ def build(*, motherlode_root: Path, output_root: Path, everbar_checkout: Path, m
     from numpy.lib.format import open_memmap
     import numpy as np
     kept=[x for x in tokens if all(len(ids)<=cap for ids in x["bar_ids"])]
-    bars=sum(len(x["bar_ids"]) for x in kept); windows=sum(max(0,len(x["bar_ids"])-WINDOW_BARS+1) for x in kept)
+    bars=sum(len(x["bar_ids"]) for x in kept); windows=sum(sum(1 for start in range(max(0,len(x["bar_ids"])-WINDOW_BARS+1)) if not any(t == ["Bar_None"] for t in x["bar_tokens"][start:start+WINDOW_BARS])) for x in kept)
     packed=stage/"training"; packed.mkdir(); ids=open_memmap(packed/"input_ids.npy",mode="w+",dtype=np.int64,shape=(windows,WINDOW_BARS,cap)); masks=open_memmap(packed/"active_mask.npy",mode="w+",dtype=np.bool_,shape=(windows,WINDOW_BARS,cap))
     split_indices={"train":[],"validation":[],"test":[]}; windows_manifest=[]; at=0
     for row in kept:

@@ -290,3 +290,10 @@ packed-view identities; it is explicitly not the historical V1 snapshot.
 Added V2-aware sidecar validation and recorded the re-audit checkpoint. The
 development preview preflight and Motherlode suite pass; candidate control
 formulas remain unaccepted pending characterization evidence.
+
+## 2026-08-30 — V2 preview window integrity correction
+
+Corrected preview allocation to size packed arrays from the eligible
+no-empty-bar-crossing windows actually emitted. Rebuilt the POP909 POC
+development authority and verified the resulting array shape against its
+window manifest. Added receipt loading for the provenance-rich POC source.
