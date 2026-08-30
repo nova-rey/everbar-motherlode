@@ -156,22 +156,23 @@ def build(*, motherlode_root: Path, output_root: Path, everbar_checkout: Path, m
     for entry in selected:
         if not materialize_canonical_stream(canonical,stream_id=entry["stream_id"],dataset_id=entry["dataset_id"],detail=entry["detail"]): raise RuntimeError("canonical receipt materialization failed")
     canonical.commit(); canonical.close()
+    check=sqlite3.connect(f"file:{stage/'canonical/streams.sqlite'}?mode=ro&immutable=1", uri=True)
+    empty_by_stream={stream_id:{int(bar) for (bar,) in check.execute("select bar_index from canonical_bars where stream_id=? and is_empty=1",(stream_id,))} for stream_id in (x["stream_id"] for x in selected)}; check.close()
     # This is new PerTok packing only: it restores the accepted score from the persisted Brick-3 receipt and never opens source MIDI or invokes Brick 3.
     tokens=[]
     for number,entry in enumerate(selected,1):
-        token=entry.get("poc_tokenization") or _tokenize(entry,everbar_checkout); token={**token,"stream_id":entry["stream_id"],"canonical_hash":entry["canonical_hash"],"source_piece_id":entry["provenance"].get("source_piece_id"),"source_track_id":entry["provenance"].get("source_track_id"),"source_family_id":entry["source_family_id"],"split":entry["split"]}; tokens.append(token)
+        token=entry.get("poc_tokenization") or _tokenize(entry,everbar_checkout); token={**token,"stream_id":entry["stream_id"],"canonical_hash":entry["canonical_hash"],"source_piece_id":entry["provenance"].get("source_piece_id"),"source_track_id":entry["provenance"].get("source_track_id"),"source_family_id":entry["source_family_id"],"split":entry["split"],"empty_bar_indices":sorted(empty_by_stream.get(entry["stream_id"],set()))}; tokens.append(token)
         if number % 250 == 0: _write(stage/"progress.json",{"state":"TOKENIZING","completed":number,"total":len(selected)})
     profile=_profile(tokens, scope=scope); cap=int(profile["selected_cap"]); _write(stage/"profiles"/"brick4.json",profile)
     from numpy.lib.format import open_memmap
     import numpy as np
     kept=[x for x in tokens if all(len(ids)<=cap for ids in x["bar_ids"])]
-    bars=sum(len(x["bar_ids"]) for x in kept); windows=sum(sum(1 for start in range(max(0,len(x["bar_ids"])-WINDOW_BARS+1)) if not any(t == ["Bar_None"] for t in x["bar_tokens"][start:start+WINDOW_BARS])) for x in kept)
+    bars=sum(len(x["bar_ids"]) for x in kept); windows=sum(sum(1 for start in range(max(0,len(x["bar_ids"])-WINDOW_BARS+1)) if not any(bar in x["empty_bar_indices"] for bar in range(start,start+WINDOW_BARS))) for x in kept)
     packed=stage/"training"; packed.mkdir(); ids=open_memmap(packed/"input_ids.npy",mode="w+",dtype=np.int64,shape=(windows,WINDOW_BARS,cap)); masks=open_memmap(packed/"active_mask.npy",mode="w+",dtype=np.bool_,shape=(windows,WINDOW_BARS,cap))
     split_indices={"train":[],"validation":[],"test":[]}; windows_manifest=[]; at=0
     for row in kept:
-        empty=[tokens_ == ["Bar_None"] for tokens_ in row["bar_tokens"]]
         for start in range(max(0,len(row["bar_ids"])-WINDOW_BARS+1)):
-            if any(empty[start:start+WINDOW_BARS]): continue
+            if any(bar in row["empty_bar_indices"] for bar in range(start,start+WINDOW_BARS)): continue
             ids[at,:,:]=0; masks[at,:,:]=False
             for block,values in enumerate(row["bar_ids"][start:start+WINDOW_BARS]): ids[at,block,:len(values)]=values; masks[at,block,:len(values)]=True
             split_indices[row["split"]].append(at); windows_manifest.append({"window_index":at,"stream_id":row["stream_id"],"source_piece_id":row["source_piece_id"],"source_family_id":row["source_family_id"],"split":row["split"],"start_bar":start}); at+=1

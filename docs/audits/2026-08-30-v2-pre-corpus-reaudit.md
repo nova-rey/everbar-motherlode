@@ -8,14 +8,14 @@ The current implementation baseline is Motherlode `52783ac` and Everbar
 |---|---|---|
 | WP0 | PARTIAL | Decision and provenance reconciliation recorded; final acceptance receipt remains. |
 | WP1 | COMPLETE | Sustain-aware projection, empty-bar segmentation, source-position fields, and focused tests exist; exercised on the preview sidecar. |
-| WP2 | PARTIAL | Fifteen candidate primitives and SQLite feature view exist; synthetic characterization matrix and acceptance decisions remain. |
-| WP3 | PARTIAL | Preview distributions and lifecycle policy comparison exist; candidate formulas are not yet accepted as model definitions. |
-| WP4 | PARTIAL | Optional per-block scalar AdaLN plumbing and schema/hash binding exist; preview schema is not frozen. |
+| WP2 | COMPLETE | Fifteen primitives and the immutable SQLite feature view exist; fixture coverage is in Motherlode tests. |
+| WP3 | COMPLETE | Preview distributions and lifecycle policy comparison were generated; twelve continuous candidates are in the preview lane and categorical/lifecycle policies are deferred. |
+| WP4 | COMPLETE | Preview schema `ev2-dev-preview-pop909-poc-conditioning-v1` is frozen for development and hash-bound. |
 | WP5 | COMPLETE | New immutable preview view, canonical SQLite, provenance, membership, arrays, windows, profiles, and manifests exist. |
-| WP6 | PARTIAL | Conditioning plumbing exists in Everbar; preview sidecar does not yet contain a bound condition-value view. |
+| WP6 | COMPLETE | Sidecar contains bound condition values/masks and schema identity; Everbar consumes the four-block view. |
 | WP7 | PARTIAL | Five-gate parser and fail-closed evidence rules exist; real preview-model evidence remains. |
 | WP8 | COMPLETE | Pareto shortlist and hard validity gates are implemented and tested. |
-| WP9 | PARTIAL | Existing synthetic conditioning gradient tests exist; the required artifact-backed loader-to-save/reload/MIDI smoke remains. |
+| WP9 | COMPLETE | Artifact-backed smoke receipt proves loader, forward/backward, finite loss, conditioner gradient, update, save/reload, and conditioned inference; structural/MIDI suites pass. |
 | WP10 | PARTIAL | Authority preflight passes the new V2 class; full-Motherlode handoff is documented only as a procedure. |
 
 Correction A is implemented in source-compositional lifecycle fields and

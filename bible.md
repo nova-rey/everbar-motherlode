@@ -297,3 +297,11 @@ Corrected preview allocation to size packed arrays from the eligible
 no-empty-bar-crossing windows actually emitted. Rebuilt the POP909 POC
 development authority and verified the resulting array shape against its
 window manifest. Added receipt loading for the provenance-rich POC source.
+
+## 2026-08-30 — V2 preview authority and conditioned smoke
+
+Rebuilt the preview using canonical `is_empty` bars as the window boundary
+authority, yielding 84,117 windows with zero empty-bar crossings. Bound a
+12-control continuous preview sidecar plus explicit deferred categorical and
+lifecycle controls, and recorded a passing artifact-backed conditioned smoke.
+Added the full-Motherlode handoff procedure; no serious training was started.
