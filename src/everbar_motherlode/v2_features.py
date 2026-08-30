@@ -11,8 +11,11 @@ import json
 import math
 import sqlite3
 from dataclasses import dataclass, asdict
+from pathlib import Path
 from statistics import mean, median, pstdev
 from typing import Any, Iterable, Sequence
+
+from .v2_artifacts import write_artifact_manifest, write_json, write_jsonl
 
 
 EXTRACTOR_SCHEMA = "everbar-motherlode.v2-candidate-features/v1"
@@ -204,18 +207,140 @@ def attach_projection(rows: Iterable[FeatureRow], projection_rows: Iterable[Any]
     return result
 
 
+def control_status(rows: Iterable[FeatureRow]) -> dict[str, Any]:
+    """Return the stable status sidecar without changing candidate values."""
+    report = characterize(rows)
+    controls = {
+        name: {
+            "status": value["status"],
+            "reason": "observed in synthetic or canonical-derived rows" if value["present"] else "no non-missing observations",
+            "present": value["present"],
+            "missing": value["missing"],
+        }
+        for name, value in report["controls"].items()
+    }
+    return {"schema": f"{EXTRACTOR_SCHEMA}#control-status", "controls": controls}
+
+
+def _lifecycle_label(row: FeatureRow, policy: str) -> str:
+    lifecycle = row.values.get("lifecycle", {})
+    index = int(lifecycle.get("source_bar_index", row.bar_index))
+    count = max(1, int(lifecycle.get("source_bar_count", row.bar_index + 1)))
+    position = float(lifecycle.get("source_position") if lifecycle.get("source_position") is not None else (index + .5) / count)
+    if policy == "fixed-bar":
+        return "START" if index == 0 else "END" if index == count - 1 else "CRUISE"
+    if policy == "fractional-position":
+        return "START" if position < .25 else "END" if position >= .75 else "CRUISE"
+    if policy == "asymmetric":
+        return "START" if position < .20 else "END" if position >= .80 else "CRUISE"
+    if policy == "hybrid":
+        return "START" if index == 0 or position < .20 else "END" if index == count - 1 or position >= .80 else "CRUISE"
+    raise ValueError(f"unknown lifecycle policy: {policy}")
+
+
+def compare_lifecycle_policies(rows: Iterable[FeatureRow]) -> dict[str, Any]:
+    """Compare unfrozen lifecycle label candidates and their row distributions."""
+    ordered = list(rows)
+    policies = {
+        "fixed-bar": {"description": "first and last source bars", "boundaries": {"start_bars": 1, "end_bars": 1}},
+        "fractional-position": {"description": "source position quartile boundaries", "boundaries": {"start_lt": .25, "end_gte": .75}},
+        "asymmetric": {"description": "asymmetric source position boundaries", "boundaries": {"start_lt": .20, "end_gte": .80}},
+        "hybrid": {"description": "first or last source bar, widened by asymmetric position", "boundaries": {"start_lt": .20, "end_gte": .80}},
+    }
+    numeric_controls = tuple(name for name in CONTROL_NAMES if name != "lifecycle")
+    result: dict[str, Any] = {"schema": f"{EXTRACTOR_SCHEMA}#lifecycle-policy-comparison", "row_count": len(ordered), "policies": {}}
+    for name, definition in policies.items():
+        labels = [_lifecycle_label(row, name) for row in ordered]
+        detail: dict[str, Any] = {**definition, "class_counts": {}, "source_dataset_counts": {}, "split_counts": {}, "numeric_means": {}}
+        for label in ("START", "CRUISE", "END"):
+            selected = [row for row, current in zip(ordered, labels) if current == label]
+            detail["class_counts"][label] = len(selected)
+            detail["numeric_means"][label] = {
+                control: mean([float(row.values[control]) for row in selected if isinstance(row.values.get(control), (int, float))])
+                if any(isinstance(row.values.get(control), (int, float)) for row in selected) else None
+                for control in numeric_controls
+            }
+        for row, label in zip(ordered, labels):
+            dataset = row.dataset_id
+            split = row.split if row.split is not None else "UNASSIGNED"
+            detail["source_dataset_counts"].setdefault(dataset, {key: 0 for key in ("START", "CRUISE", "END")})[label] += 1
+            detail["split_counts"].setdefault(split, {key: 0 for key in ("START", "CRUISE", "END")})[label] += 1
+        detail["boundary_rows"] = [
+            {"stream_id": row.stream_id, "bar_index": row.bar_index, "label": label,
+             "source_position": row.values["lifecycle"].get("source_position"),
+             "segment_position": row.values["lifecycle"].get("segment_position")}
+            for row, label in zip(ordered, labels)
+            if row.values.get("lifecycle", {}).get("segment_position") == 0
+            or row.values.get("lifecycle", {}).get("source_bar_index") in {
+                0, int(row.values.get("lifecycle", {}).get("source_bar_count", 1)) - 1,
+            }
+        ]
+        result["policies"][name] = detail
+    result["comparison_hash"] = hashlib.sha256(json.dumps(result, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return result
+
+
+# Short name for callers that treat this as a comparison rather than a report.
+lifecycle_policy_comparison = compare_lifecycle_policies
+
+
+def _write_primitives_sqlite(rows: Sequence[FeatureRow], path: Path) -> None:
+    """Write a logical feature view with no wall-clock fields."""
+    if path.exists():
+        path.unlink()
+    conn = sqlite3.connect(path)
+    conn.execute("pragma journal_mode=delete")
+    conn.executescript("""
+      create table primitive_features(
+        stream_id text not null, bar_index integer not null,
+        source_piece_id text, source_track_id text, dataset_id text not null,
+        split text, values_json text not null, missing_json text not null,
+        confidence_json text not null, extractor_id text not null,
+        primary key(stream_id, bar_index)
+      );
+    """)
+    conn.executemany(
+        "insert into primitive_features values(?,?,?,?,?,?,?,?,?,?)",
+        [(row.stream_id, row.bar_index, row.source_piece_id, row.source_track_id, row.dataset_id, row.split,
+          json.dumps(row.values, sort_keys=True, separators=(",", ":")),
+          json.dumps(row.missing, sort_keys=True, separators=(",", ":")),
+          json.dumps(row.confidence, sort_keys=True, separators=(",", ":")), row.extractor_id)
+         for row in rows],
+    )
+    conn.commit()
+    conn.execute("vacuum")
+    conn.close()
+
+
 def write_feature_view(rows: Iterable[FeatureRow], output_dir: Any) -> dict[str, Any]:
-    """Persist rows and characterization with content-addressed metadata."""
-    output_dir = __import__("pathlib").Path(output_dir)
+    """Persist replaceable feature sidecars with deterministic metadata."""
+    output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    ordered = [row.to_dict() for row in rows]
-    payload = "".join(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n" for row in ordered)
-    (output_dir / "features.jsonl").write_text(payload)
-    report = characterize([FeatureRow(**row) for row in ordered])
-    (output_dir / "characterization.json").write_text(json.dumps(report, sort_keys=True, indent=2) + "\n")
-    manifest = {"schema": EXTRACTOR_SCHEMA, "row_count": len(ordered),
-                "features_sha256": hashlib.sha256(payload.encode()).hexdigest(),
-                "characterization_sha256": report["hash"]}
-    manifest["manifest_sha256"] = hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    (output_dir / "manifest.json").write_text(json.dumps(manifest, sort_keys=True, indent=2) + "\n")
-    return manifest
+    ordered_rows = list(rows)
+    ordered_rows.sort(key=lambda row: (row.stream_id, row.bar_index))
+    ordered = [row.to_dict() for row in ordered_rows]
+    features_path = output_dir / "features.jsonl"
+    features_sha = write_jsonl(features_path, ordered)
+    primitives_path = output_dir / "primitives.sqlite"
+    _write_primitives_sqlite(ordered_rows, primitives_path)
+    report = characterize(ordered_rows)
+    status = control_status(ordered_rows)
+    lifecycle = compare_lifecycle_policies(ordered_rows)
+    characterization_path = output_dir / "characterization.json"
+    status_path = output_dir / "control-status.json"
+    lifecycle_path = output_dir / "lifecycle-policy-comparison.json"
+    write_json(characterization_path, report)
+    write_json(status_path, status)
+    write_json(lifecycle_path, lifecycle)
+    return write_artifact_manifest(
+        output_dir, schema=EXTRACTOR_SCHEMA,
+        files={"features": features_path, "primitives": primitives_path,
+               "characterization": characterization_path, "control_status": status_path,
+               "lifecycle_policy_comparison": lifecycle_path},
+        metadata={"row_count": len(ordered_rows), "features_sha256": features_sha,
+                  "characterization_sha256": report["hash"],
+                  "control_status_sha256": status["schema"] and hashlib.sha256(
+                      json.dumps(status, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+                  "lifecycle_comparison_sha256": lifecycle["comparison_hash"],
+                  "extractor_id": EXTRACTOR_SCHEMA, "canonical_read_only": True},
+    )

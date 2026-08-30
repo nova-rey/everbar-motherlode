@@ -5,6 +5,7 @@ from .core import config, init, merge_shards, monitor, prefetch, preflight, prog
 from .distributed import distributed_shard, verify_distributed_run
 from .feature_base import backfill_canonical, extract_primitive_features
 from .v2_features import attach_projection, extract_rows, write_feature_view
+from .v2_artifacts import canonical_identity, open_canonical_read_only
 from .v2_projection import project_stream, write_projection
 def main(argv=None):
  p=argparse.ArgumentParser(); sub=p.add_subparsers(dest="cmd",required=True)
@@ -55,13 +56,13 @@ def main(argv=None):
  if a.cmd=="backfill-canonical": print(__import__('json').dumps(backfill_canonical(a.root),indent=2)); return 0
  if a.cmd=="extract-features": print(__import__('json').dumps(extract_primitive_features(a.root,a.extractor_id),indent=2)); return 0
  if a.cmd=="project-v2":
-  conn=__import__('sqlite3').connect(f"file:{a.canonical_db}?mode=ro", uri=True)
+  conn=open_canonical_read_only(a.canonical_db)
   rows=[]; segments=[]
   for (stream_id,) in conn.execute("select stream_id from canonical_streams order by stream_id"):
    projected, found=project_stream(conn, stream_id); rows.extend(projected); segments.extend(found)
-  conn.close(); print(__import__('json').dumps(write_projection(rows, segments, a.output_dir), indent=2, sort_keys=True)); return 0
+  conn.close(); print(__import__('json').dumps(write_projection(rows, segments, a.output_dir, canonical_identity=canonical_identity(a.canonical_db)), indent=2, sort_keys=True)); return 0
  if a.cmd=="characterize-v2":
-  conn=__import__('sqlite3').connect(f"file:{a.canonical_db}?mode=ro", uri=True)
+  conn=open_canonical_read_only(a.canonical_db)
   ids=None if a.limit_streams is None else [row[0] for row in conn.execute("select stream_id from canonical_streams order by stream_id limit ?", (a.limit_streams,))]
   rows=extract_rows(conn, stream_ids=ids); conn.close()
   if a.projection_dir is not None:

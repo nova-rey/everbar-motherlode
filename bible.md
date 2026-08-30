@@ -259,3 +259,11 @@ characterization hashes. This remains non-authoritative because the approved
 The V2 CLI now exposes explicit read-only `project-v2` and `characterize-v2`
 commands for these derived views; they require a caller-supplied canonical
 SQLite path and never infer or download corpus authority.
+
+## 2026-08-29 — V2 sidecar artifact bindings
+
+Added deterministic content-addressed manifests, dependency-free int64 index
+writers, and a query-only canonical SQLite opener for derived V2 projection
+and feature artifacts. Projection and feature views now bind their files and
+canonical identity without mutating Motherlode authority; synthetic tests
+cover read-only enforcement and reproducibility. No preview corpus was built.

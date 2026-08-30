@@ -10,7 +10,9 @@ import json
 import sqlite3
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence
+
+from .v2_artifacts import write_artifact_manifest, write_int64_npy, write_jsonl
 
 
 PROJECTION_SCHEMA = "everbar-motherlode.v2-live-projection/v1"
@@ -117,12 +119,78 @@ def eligible_four_span_windows(
     return result
 
 
-def write_projection(rows: Iterable[LiveBar], segments: Iterable[LiveSegment], output_dir: Path) -> dict[str, object]:
-    """Write deterministic JSONL projection artifacts."""
+def represented_span_rows(
+    rows: Iterable[LiveBar], represented_spans: Iterable[Mapping[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Normalize represented spans and bind them to projected bars.
+
+    A caller with a frozen base view can provide its exact represented spans.
+    The default is a canonical-bar mapping, useful for synthetic fixtures and
+    for projection-only inspection before a base array is available.
+    """
+    projected = {(row.stream_id, row.bar_index): row for row in rows}
+    if represented_spans is None:
+        source = [
+            {"stream_id": row.stream_id, "span_index": index, "bar_index": row.bar_index,
+             "start_tick": row.start_tick, "end_tick": row.end_tick}
+            for index, row in enumerate(sorted(projected.values(), key=lambda value: (value.stream_id, value.bar_index)))
+        ]
+    else:
+        source = [dict(item) for item in represented_spans]
+    result: list[dict[str, Any]] = []
+    for item in sorted(source, key=lambda value: (str(value["stream_id"]), int(value["span_index"]))):
+        key = (str(item["stream_id"]), int(item["bar_index"]))
+        row = projected.get(key)
+        if row is None:
+            raise ValueError(f"represented span is missing projected bar {key[0]}:{key[1]}")
+        result.append({
+            "stream_id": row.stream_id,
+            "span_index": int(item["span_index"]),
+            "bar_index": row.bar_index,
+            "start_tick": int(item.get("start_tick", row.start_tick)),
+            "end_tick": int(item.get("end_tick", row.end_tick)),
+            "occupied": row.occupied,
+            "segment_id": row.segment_id,
+            "segment_position": row.segment_position,
+            "source_bar_index": row.source_bar_index,
+            "source_bar_count": row.source_bar_count,
+            "source_position": row.source_position,
+        })
+    return result
+
+
+def write_projection(
+    rows: Iterable[LiveBar], segments: Iterable[LiveSegment], output_dir: Path,
+    *, represented_spans: Iterable[Mapping[str, Any]] | None = None,
+    eligible_window_indices: Iterable[int] | None = None,
+    canonical_identity: Mapping[str, Any] | None = None,
+) -> dict[str, object]:
+    """Write deterministic JSONL projection artifacts and a sidecar manifest."""
     output_dir.mkdir(parents=True, exist_ok=True)
     segment_rows = [asdict(row) for row in segments]
     bar_rows = [asdict(row) for row in rows]
-    for name, values in (("segments.jsonl", segment_rows), ("bars.jsonl", bar_rows)):
-        path = output_dir / name
-        path.write_text("".join(json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n" for value in values))
-    return {"schema": PROJECTION_SCHEMA, "bar_count": len(bar_rows), "segment_count": len(segment_rows)}
+    span_rows = represented_span_rows(
+        [LiveBar(**row) for row in bar_rows], represented_spans,
+    )
+    segments_path = output_dir / "segments.jsonl"
+    bars_path = output_dir / "bars.jsonl"
+    spans_path = output_dir / "represented-span-map.jsonl"
+    write_jsonl(segments_path, segment_rows)
+    write_jsonl(bars_path, bar_rows)
+    write_jsonl(spans_path, span_rows)
+    files: dict[str, Path] = {
+        "segments": segments_path, "bars": bars_path, "represented_span_map": spans_path,
+    }
+    if eligible_window_indices is not None:
+        index_path = output_dir / "eligible-base-window-indices.npy"
+        write_int64_npy(index_path, eligible_window_indices)
+        files["eligible_base_window_indices"] = index_path
+    manifest = write_artifact_manifest(
+        output_dir, schema=PROJECTION_SCHEMA, files=files,
+        metadata={
+            "bar_count": len(bar_rows), "segment_count": len(segment_rows),
+            "represented_span_count": len(span_rows),
+            **({"canonical_identity": dict(canonical_identity)} if canonical_identity else {}),
+        },
+    )
+    return manifest
