@@ -85,6 +85,16 @@ def _extract_gigamidi_nested(out:Path):
         pending=[p for p in sorted(out.rglob("*.zip")) if not p.with_suffix(p.suffix+".expanded").exists()]
         if not pending: return
         for nested in pending:
+            # macOS archives can carry AppleDouble resource-fork sidecars such
+            # as ``._training.zip``. Their suffix is ``.zip`` but their bytes
+            # are not a ZIP archive. They carry no corpus MIDI and must not
+            # make resumable extraction spin forever. Any other non-ZIP file
+            # with a ZIP suffix remains a hard failure.
+            if not zipfile.is_zipfile(nested):
+                if not nested.name.startswith("._"):
+                    raise zipfile.BadZipFile(f"nested archive is not a ZIP file: {nested}")
+                nested.with_suffix(nested.suffix+".expanded").write_text("APPLEDOUBLE_SIDECAR\n")
+                continue
             _safe_zip_extract(nested,nested.parent)
             nested.with_suffix(nested.suffix+".expanded").write_text(sha(nested.read_bytes())+"\n")
 def extract(root:Path,s:dict,artifact:Path)->Path:

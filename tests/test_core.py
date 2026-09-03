@@ -133,6 +133,17 @@ def test_gigamidi_nested_zip_extraction_is_resumable(tmp_path):
     assert (out/"Final"/"training"/"example.mid").read_bytes() == b"MThd"
     assert (out/".gigamidi-nested-complete").exists()
     assert extract(tmp_path,{"id":"gigamidi"},outer) == out
+
+def test_gigamidi_nested_extraction_skips_only_appledouble_zip_sidecars(tmp_path):
+    inner=io.BytesIO()
+    with zipfile.ZipFile(inner,"w") as z: z.writestr("piece.mid",b"MThd")
+    outer=tmp_path/"giga.zip"
+    with zipfile.ZipFile(outer,"w") as z:
+        z.writestr("dataset/training.zip",inner.getvalue())
+        z.writestr("dataset/._training.zip",b"appledouble-not-a-zip")
+    out=extract(tmp_path,{"id":"gigamidi"},outer)
+    assert (out/"dataset"/"piece.mid").read_bytes() == b"MThd"
+    assert (out/"dataset"/"._training.zip.expanded").read_text() == "APPLEDOUBLE_SIDECAR\n"
 def test_progress_and_disk_guard(tmp_path):
     c=cfg(); c["min_free_bytes"]=10**30
     assert not preflight(tmp_path,c)["ok"]

@@ -305,3 +305,11 @@ authority, yielding 84,117 windows with zero empty-bar crossings. Bound a
 12-control continuous preview sidecar plus explicit deferred categorical and
 lifecycle controls, and recorded a passing artifact-backed conditioned smoke.
 Added the full-Motherlode handoff procedure; no serious training was started.
+
+## 2026-09-03 — GigaMIDI AppleDouble extraction recovery
+
+GigaMIDI nested extraction now recognizes and records macOS AppleDouble
+resource-fork sidecars named like `._training.zip` without treating them as
+corpus archives. Genuine non-ZIP files with a `.zip` suffix still fail closed.
+The change is covered by the focused core extraction suite and preserves the
+existing resumable extraction markers.
