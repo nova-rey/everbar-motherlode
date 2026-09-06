@@ -3,7 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import pytest
 from everbar_motherlode.core import config, init, partition_for, preflight, stable, extract, db, derive, performance_flattening_v1, progress, reconcile, shard, writej, _pdmx_partition_files, _partition_manifest_files, brick3_command
-from everbar_motherlode.distributed import output_prefix, publish_shard, shard_label, stage_shard, verify_distributed_run
+from everbar_motherlode.distributed import distributed_shard, output_prefix, publish_shard, shard_label, stage_shard, verify_distributed_run
 from everbar_motherlode.feature_base import backfill_canonical, extract_primitive_features
 
 def cfg(): return config(Path("configs/motherlode-v1.toml"))
@@ -66,6 +66,23 @@ def test_distributed_stage_is_run_scoped_and_retry_safe(tmp_path):
     for index in (0,1):
         package=complete_root/f"shard-{index:05d}-of-00002"; writej(package/"completion.json",{"state":"COMPLETE","shard_index":index,"shard_count":2}); writej(package/"item-ids.json",{"item_ids":[f"v1_{index}"]})
     assert verify_distributed_run("file://"+str(tmp_path/"complete"),"run-b","pop909",2)["state"] == "COMPLETE"
+
+def test_distributed_shard_initializes_an_empty_disposable_root(tmp_path, monkeypatch):
+    root = tmp_path / "worker-root"
+    seen = {}
+    monkeypatch.setattr("everbar_motherlode.distributed.config", lambda _: {"everbar_sha": "fixture"})
+    monkeypatch.setattr("everbar_motherlode.distributed.fetch_input", lambda *_: None)
+    def fake_shard(worker_root, *_):
+        seen["layout"] = ((worker_root / "state").is_dir(), (worker_root / "progress" / "shards").is_dir())
+        return {"state": "COMPLETE"}
+    monkeypatch.setattr("everbar_motherlode.distributed.shard", fake_shard)
+    stage = root / "outbox"; stage.mkdir(parents=True)
+    manifest = {"state": "COMPLETE", "item_count": 0}
+    monkeypatch.setattr("everbar_motherlode.distributed.stage_shard", lambda *_: (stage, manifest))
+    monkeypatch.setattr("everbar_motherlode.distributed.publish_shard", lambda *_: "file:///published")
+    result = distributed_shard(root, tmp_path / "config.toml", "fixture", 0, 1, "run", "", "file:///out")
+    assert seen["layout"] == (True, True)
+    assert result["output_destination"] == "file:///published"
 
 def test_partition_worker_uses_distributed_publish_label(tmp_path, monkeypatch):
     root=tmp_path/"root"; (root/"raw"/"fixture").mkdir(parents=True)

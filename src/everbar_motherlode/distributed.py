@@ -174,6 +174,12 @@ def publish_shard(stage: Path, output_uri: str, manifest: dict, force: bool = Fa
 
 def distributed_shard(root: Path, config_path: Path, dataset_id: str, shard_index: int, shard_count: int, run_id: str, input_uri: str, output_uri: str, force: bool = False) -> dict:
     """Fetch, process, verify, package, and publish one independent shard."""
+    # Disposable workers receive an empty run root.  ``shard`` deliberately
+    # writes a small start marker before it creates its shard-local database,
+    # so establish the durable worker layout at this boundary rather than
+    # requiring a separate preflight command on every ephemeral machine.
+    (root / "state").mkdir(parents=True, exist_ok=True)
+    (root / "progress" / "shards").mkdir(parents=True, exist_ok=True)
     cfg = config(config_path)
     fetch_input(input_uri, root, dataset_id)
     started = time.time()

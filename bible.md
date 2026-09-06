@@ -82,6 +82,15 @@ The GitHub Actions smoke path now selects POP909 as its intentionally small firs
 
 Added a development-thread brief separating the invalid remote-path receipts from genuine MAESTRO pedal-controller and ASAP sustain/zero-duration-note findings. The brief records sample evidence and decision options while preserving the rule that Motherlode must not alter Brick 3 policy or silently repair source semantics.
 
+## 2026-09-06 — Disposable Azure worker-root initialization
+
+`distributed-shard` now creates its required `state/` and `progress/shards/`
+layout before fetching and processing an immutable input package. This fixes the
+empty-root contract used by disposable Azure/GitHub workers without changing
+shard ownership, Brick 3 policy, R2 publication ordering, or completion
+semantics. A regression test proves the worker layout exists before the shard
+implementation is invoked.
+
 ## 2026-08-22 — Cloudflare R2 persistent storage handoff
 
 Provisioned private `everbar-motherlode-input` and `everbar-motherlode-output` R2 buckets and a protected `corpus-write` GitHub Environment secret containing the rclone configuration. The credential was verified with an S3-compatible bucket listing and is never represented in repository files, logs, or workflow output. Distributed-preparation documentation now uses the provisioned rclone URIs.
