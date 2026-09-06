@@ -93,13 +93,16 @@ def test_direct_s3_publish_writes_completion_last(tmp_path, monkeypatch):
     writej(stage / "payload" / "item.json", {"item": 1})
     writej(stage / "completion.json", {"state": "COMPLETE"})
     writes = []
+    class Client:
+        def upload_file(self, source, bucket, key):
+            writes.append((Path(source).name, bucket, key))
     monkeypatch.setattr("everbar_motherlode.distributed._direct_s3_exists", lambda _: False)
-    monkeypatch.setattr("everbar_motherlode.distributed._direct_s3_write", lambda uri, source: writes.append((uri, source.name)))
+    monkeypatch.setattr("everbar_motherlode.distributed._direct_s3_key", lambda _: (Client(), "output", "runs/run/fixture/shard-00000-of-00001"))
     manifest = {"run_id": "run", "dataset_id": "fixture", "shard_index": 0, "shard_count": 1}
     result = publish_shard(stage, "direct-s3://evacuate/output", manifest)
     assert result == "direct-s3://evacuate/output/runs/run/fixture/shard-00000-of-00001"
-    assert writes[-1] == (result + "/completion.json", "completion.json")
-    assert all(name != "completion.json" for _, name in writes[:-1])
+    assert writes[-1] == ("completion.json", "output", "runs/run/fixture/shard-00000-of-00001/completion.json")
+    assert all(name != "completion.json" for name, _, _ in writes[:-1])
 
 def test_partition_worker_uses_distributed_publish_label(tmp_path, monkeypatch):
     root=tmp_path/"root"; (root/"raw"/"fixture").mkdir(parents=True)

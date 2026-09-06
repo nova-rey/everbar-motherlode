@@ -242,11 +242,13 @@ def publish_shard(stage: Path, output_uri: str, manifest: dict, force: bool = Fa
         completion = target + "/completion.json"
         if not force and _direct_s3_exists(completion):
             raise FileExistsError(f"completed shard already exists: {completion}")
+        client, bucket, prefix_key = _direct_s3_key(target)
         for source in sorted(stage.rglob("*")):
             if source.is_file() and source.name != "completion.json":
-                _direct_s3_write(target + "/" + source.relative_to(stage).as_posix(), source)
+                key = "/".join(part for part in (prefix_key, source.relative_to(stage).as_posix()) if part)
+                client.upload_file(str(source), bucket, key)
         # This marker is intentionally last and is the sole completion signal.
-        _direct_s3_write(completion, stage / "completion.json")
+        client.upload_file(str(stage / "completion.json"), bucket, prefix_key + "/completion.json")
         return target
     if not force:
         probe = subprocess.run(["rclone", "lsf", target + "/completion.json"], capture_output=True, text=True)
