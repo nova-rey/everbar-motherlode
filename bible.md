@@ -91,6 +91,15 @@ shard ownership, Brick 3 policy, R2 publication ordering, or completion
 semantics. A regression test proves the worker layout exists before the shard
 implementation is invoked.
 
+## 2026-09-06 — Direct S3 publication transport for disposable workers
+
+Added an output-only `direct-s3://REMOTE/BUCKET/prefix` transport for the
+existing protected rclone credential configuration. It uses normal SigV4 S3
+PUT/GET calls where the configured R2 endpoint rejects rclone uploads with
+HTTP 501, while retaining immutable run prefixes and payload-before-
+`completion.json` publication. Input acquisition remains the existing rclone
+path; credentials remain out of repository files, receipts, and manifests.
+
 ## 2026-08-22 — Cloudflare R2 persistent storage handoff
 
 Provisioned private `everbar-motherlode-input` and `everbar-motherlode-output` R2 buckets and a protected `corpus-write` GitHub Environment secret containing the rclone configuration. The credential was verified with an S3-compatible bucket listing and is never represented in repository files, logs, or workflow output. Distributed-preparation documentation now uses the provisioned rclone URIs.

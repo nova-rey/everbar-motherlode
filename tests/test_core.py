@@ -3,7 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import pytest
 from everbar_motherlode.core import config, init, partition_for, preflight, stable, extract, db, derive, performance_flattening_v1, progress, reconcile, shard, writej, _pdmx_partition_files, _partition_manifest_files, brick3_command
-from everbar_motherlode.distributed import distributed_shard, output_prefix, publish_shard, shard_label, stage_shard, verify_distributed_run
+from everbar_motherlode.distributed import _direct_s3_parts, distributed_shard, output_prefix, publish_shard, shard_label, stage_shard, verify_distributed_run
 from everbar_motherlode.feature_base import backfill_canonical, extract_primitive_features
 
 def cfg(): return config(Path("configs/motherlode-v1.toml"))
@@ -83,6 +83,10 @@ def test_distributed_shard_initializes_an_empty_disposable_root(tmp_path, monkey
     result = distributed_shard(root, tmp_path / "config.toml", "fixture", 0, 1, "run", "", "file:///out")
     assert seen["layout"] == (True, True)
     assert result["output_destination"] == "file:///published"
+
+def test_direct_s3_uri_requires_remote_and_bucket():
+    assert _direct_s3_parts("direct-s3://evacuate/everbar-output/runs/a") == ("evacuate", "everbar-output", "runs/a")
+    with pytest.raises(ValueError): _direct_s3_parts("direct-s3://evacuate")
 
 def test_partition_worker_uses_distributed_publish_label(tmp_path, monkeypatch):
     root=tmp_path/"root"; (root/"raw"/"fixture").mkdir(parents=True)

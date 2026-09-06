@@ -8,7 +8,7 @@ mounted storage; all other locations are delegated to a pre-authenticated
 """
 from __future__ import annotations
 
-import json, os, shutil, sqlite3, subprocess, time
+import configparser, json, os, shutil, sqlite3, subprocess, time
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -34,6 +34,73 @@ def output_prefix(run_id: str, dataset_id: str, shard_index: int, shard_count: i
 
 def _rclone(*args: str) -> None:
     subprocess.run(["rclone", *args], check=True)
+
+
+def _direct_s3_parts(uri: str) -> tuple[str, str, str]:
+    """Return configured rclone remote, bucket, and object prefix for direct S3.
+
+    ``direct-s3://REMOTE/BUCKET/prefix`` is an output-only escape hatch for
+    S3-compatible stores whose server accepts ordinary SigV4 PUT requests but
+    rejects the legacy rclone upload dialect.  Credentials remain in the
+    existing protected rclone configuration; they are never serialized into a
+    run package or manifest.
+    """
+    parsed = urlparse(uri)
+    if parsed.scheme != "direct-s3" or not parsed.netloc:
+        raise ValueError(f"invalid direct S3 URI: {uri}")
+    segments = [part for part in parsed.path.split("/") if part]
+    if not segments:
+        raise ValueError("direct S3 URI requires a bucket")
+    return parsed.netloc, segments[0], "/".join(segments[1:])
+
+
+def _direct_s3_client(uri: str):
+    remote, _, _ = _direct_s3_parts(uri)
+    config_path = os.environ.get("RCLONE_CONFIG")
+    if not config_path:
+        raise RuntimeError("RCLONE_CONFIG is required for direct S3 transport")
+    parser = configparser.ConfigParser()
+    if not parser.read(config_path) or remote not in parser:
+        raise RuntimeError(f"direct S3 remote is unavailable: {remote}")
+    section = parser[remote]
+    if section.get("type") != "s3" or not section.get("endpoint"):
+        raise RuntimeError(f"direct S3 remote is not an S3 configuration: {remote}")
+    try:
+        import boto3
+    except ImportError as exc:  # pragma: no cover - exercised by worker bootstrap
+        raise RuntimeError("direct S3 transport requires boto3") from exc
+    return boto3.client("s3", endpoint_url=section["endpoint"],
+                        aws_access_key_id=section.get("access_key_id"),
+                        aws_secret_access_key=section.get("secret_access_key"),
+                        region_name=section.get("region", "auto"))
+
+
+def _direct_s3_key(uri: str, relative: str = "") -> tuple[object, str, str]:
+    _, bucket, prefix = _direct_s3_parts(uri)
+    key = "/".join(part for part in (prefix.rstrip("/"), relative.lstrip("/")) if part)
+    return _direct_s3_client(uri), bucket, key
+
+
+def _direct_s3_write(uri: str, source: Path) -> None:
+    client, bucket, key = _direct_s3_key(uri)
+    client.upload_file(str(source), bucket, key)
+
+
+def _direct_s3_read(uri: str) -> str:
+    client, bucket, key = _direct_s3_key(uri)
+    return client.get_object(Bucket=bucket, Key=key)["Body"].read().decode("utf-8")
+
+
+def _direct_s3_exists(uri: str) -> bool:
+    client, bucket, key = _direct_s3_key(uri)
+    try:
+        client.head_object(Bucket=bucket, Key=key)
+    except Exception as exc:
+        response = getattr(exc, "response", {})
+        if str(response.get("ResponseMetadata", {}).get("HTTPStatusCode")) == "404":
+            return False
+        raise
+    return True
 
 
 def fetch_input(input_uri: str, root: Path, dataset_id: str) -> None:
@@ -113,6 +180,8 @@ def stage_shard(root: Path, cfg: dict, dataset_id: str, shard_index: int, shard_
 
 
 def _read_uri_json(uri: str) -> dict:
+    if uri.startswith("direct-s3://"):
+        return json.loads(_direct_s3_read(uri))
     if uri.startswith("file://"):
         return json.loads(Path(urlparse(uri).path).read_text())
     read = subprocess.run(["rclone", "cat", uri], check=True, capture_output=True, text=True)
@@ -141,6 +210,12 @@ def verify_distributed_run(output_uri: str, run_id: str, dataset_id: str, shard_
     if output_uri.startswith("file://"):
         destination = Path(urlparse(output_uri).path) / "runs" / run_id / dataset_id / "run-manifest.json"
         writej(destination, report)
+    elif output_uri.startswith("direct-s3://"):
+        destination = output_uri.rstrip("/") + "/runs/" + run_id + "/" + dataset_id + "/run-manifest.json"
+        temporary = Path.cwd() / f"motherlode-run-manifest-{run_id}-{dataset_id}.json"
+        writej(temporary, report)
+        try: _direct_s3_write(destination, temporary)
+        finally: temporary.unlink(missing_ok=True)
     else:
         temporary = Path.cwd() / f"motherlode-run-manifest-{run_id}-{dataset_id}.json"
         writej(temporary, report)
@@ -163,6 +238,16 @@ def publish_shard(stage: Path, output_uri: str, manifest: dict, force: bool = Fa
         temporary.replace(destination)
         return str(destination)
     target = output_uri.rstrip("/") + "/" + prefix
+    if output_uri.startswith("direct-s3://"):
+        completion = target + "/completion.json"
+        if not force and _direct_s3_exists(completion):
+            raise FileExistsError(f"completed shard already exists: {completion}")
+        for source in sorted(stage.rglob("*")):
+            if source.is_file() and source.name != "completion.json":
+                _direct_s3_write(target + "/" + source.relative_to(stage).as_posix(), source)
+        # This marker is intentionally last and is the sole completion signal.
+        _direct_s3_write(completion, stage / "completion.json")
+        return target
     if not force:
         probe = subprocess.run(["rclone", "lsf", target + "/completion.json"], capture_output=True, text=True)
         if probe.returncode == 0 and probe.stdout.strip():
