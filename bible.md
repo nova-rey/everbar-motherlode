@@ -100,6 +100,10 @@ HTTP 501, while retaining immutable run prefixes and payload-before-
 `completion.json` publication. Input acquisition remains the existing rclone
 path; credentials remain out of repository files, receipts, and manifests.
 
+The direct-S3 publisher is explicitly tested to write every payload object
+before the completion marker, preventing a partially uploaded shard from being
+mistaken for a completed distributed result.
+
 ## 2026-08-22 — Cloudflare R2 persistent storage handoff
 
 Provisioned private `everbar-motherlode-input` and `everbar-motherlode-output` R2 buckets and a protected `corpus-write` GitHub Environment secret containing the rclone configuration. The credential was verified with an S3-compatible bucket listing and is never represented in repository files, logs, or workflow output. Distributed-preparation documentation now uses the provisioned rclone URIs.
