@@ -9,6 +9,7 @@ mounted storage; all other locations are delegated to a pre-authenticated
 from __future__ import annotations
 
 import configparser, json, os, shutil, sqlite3, subprocess, time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -243,10 +244,15 @@ def publish_shard(stage: Path, output_uri: str, manifest: dict, force: bool = Fa
         if not force and _direct_s3_exists(completion):
             raise FileExistsError(f"completed shard already exists: {completion}")
         client, bucket, prefix_key = _direct_s3_key(target)
-        for source in sorted(stage.rglob("*")):
-            if source.is_file() and source.name != "completion.json":
-                key = "/".join(part for part in (prefix_key, source.relative_to(stage).as_posix()) if part)
-                client.upload_file(str(source), bucket, key)
+        payloads = [source for source in sorted(stage.rglob("*"))
+                    if source.is_file() and source.name != "completion.json"]
+        def upload_payload(source: Path) -> None:
+            key = "/".join(part for part in (prefix_key, source.relative_to(stage).as_posix()) if part)
+            client.upload_file(str(source), bucket, key)
+        # Bound concurrency to keep a shard's durable publication fast without
+        # turning a large worker fleet into an unbounded object-store fanout.
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            list(pool.map(upload_payload, payloads))
         # This marker is intentionally last and is the sole completion signal.
         client.upload_file(str(stage / "completion.json"), bucket, prefix_key + "/completion.json")
         return target

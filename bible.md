@@ -108,6 +108,11 @@ Publication reuses one authenticated S3 client for the entire shard package;
 this avoids reopening a client for every small receipt and keeps the durable
 publication boundary practical for high-item-count workers.
 
+Payload files are uploaded with a bounded sixteen-way fanout, while the
+completion marker remains strictly post-payload. This retains fail-closed
+publication semantics and avoids serial tiny-object latency dominating CPU
+preparation on disposable workers.
+
 ## 2026-08-22 — Cloudflare R2 persistent storage handoff
 
 Provisioned private `everbar-motherlode-input` and `everbar-motherlode-output` R2 buckets and a protected `corpus-write` GitHub Environment secret containing the rclone configuration. The credential was verified with an S3-compatible bucket listing and is never represented in repository files, logs, or workflow output. Distributed-preparation documentation now uses the provisioned rclone URIs.
