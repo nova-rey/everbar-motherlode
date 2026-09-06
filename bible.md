@@ -344,3 +344,12 @@ resource-fork sidecars named like `._training.zip` without treating them as
 corpus archives. Genuine non-ZIP files with a `.zip` suffix still fail closed.
 The change is covered by the focused core extraction suite and preserves the
 existing resumable extraction markers.
+## 2026-09-06 — Azure shared-source distributed workers
+
+Added the explicit `distributed-shard --pre-staged-input` boundary for
+disposable fleet workers.  It validates the existing immutable raw archive and
+extraction readiness markers, including GigaMIDI's nested-extraction marker,
+then skips per-worker fetch/extraction while retaining the historical default
+path unchanged.  This permits a VM to stage one verified source tree and serve
+isolated deterministic shard workers without changing Brick 3, ownership, or
+completion-marker semantics.

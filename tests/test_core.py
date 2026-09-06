@@ -3,7 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import pytest
 from everbar_motherlode.core import config, init, partition_for, preflight, stable, extract, db, derive, performance_flattening_v1, progress, reconcile, shard, writej, _pdmx_partition_files, _partition_manifest_files, brick3_command
-from everbar_motherlode.distributed import _direct_s3_parts, distributed_shard, output_prefix, publish_shard, shard_label, stage_shard, verify_distributed_run
+from everbar_motherlode.distributed import _direct_s3_parts, distributed_shard, output_prefix, publish_shard, shard_label, stage_shard, validate_pre_staged_input, verify_distributed_run
 from everbar_motherlode.feature_base import backfill_canonical, extract_primitive_features
 
 def cfg(): return config(Path("configs/motherlode-v1.toml"))
@@ -72,7 +72,7 @@ def test_distributed_shard_initializes_an_empty_disposable_root(tmp_path, monkey
     seen = {}
     monkeypatch.setattr("everbar_motherlode.distributed.config", lambda _: {"everbar_sha": "fixture"})
     monkeypatch.setattr("everbar_motherlode.distributed.fetch_input", lambda *_: None)
-    def fake_shard(worker_root, *_):
+    def fake_shard(worker_root, *_, **__):
         seen["layout"] = ((worker_root / "state").is_dir(), (worker_root / "progress" / "shards").is_dir())
         return {"state": "COMPLETE"}
     monkeypatch.setattr("everbar_motherlode.distributed.shard", fake_shard)
@@ -83,6 +83,46 @@ def test_distributed_shard_initializes_an_empty_disposable_root(tmp_path, monkey
     result = distributed_shard(root, tmp_path / "config.toml", "fixture", 0, 1, "run", "", "file:///out")
     assert seen["layout"] == (True, True)
     assert result["output_destination"] == "file:///published"
+
+def test_prestaged_distributed_shard_skips_fetch_and_extraction(tmp_path, monkeypatch):
+    root = tmp_path / "worker-root"
+    raw = root / "raw" / "fixture" / "fixture.download"; raw.parent.mkdir(parents=True); raw.write_bytes(b"archive")
+    extracted = root / "extracted" / "fixture"; extracted.mkdir(parents=True); (extracted / ".complete").write_text("a" * 64 + "\n")
+    cfg = {"everbar_sha": "fixture", "registry": "ignored"}
+    monkeypatch.setattr("everbar_motherlode.distributed.config", lambda _: cfg)
+    monkeypatch.setattr("everbar_motherlode.distributed.registry", lambda _: [{"id": "fixture"}])
+    monkeypatch.setattr("everbar_motherlode.distributed.fetch_input", lambda *_: pytest.fail("must not fetch pre-staged input"))
+    seen = {}
+    def fake_shard(*args, **kwargs):
+        seen["pre_staged"] = kwargs["pre_staged"]
+        return {"state": "COMPLETE"}
+    monkeypatch.setattr("everbar_motherlode.distributed.shard", fake_shard)
+    stage = root / "outbox"; stage.mkdir(parents=True)
+    monkeypatch.setattr("everbar_motherlode.distributed.stage_shard", lambda *_: (stage, {"state": "COMPLETE", "item_count": 0}))
+    monkeypatch.setattr("everbar_motherlode.distributed.publish_shard", lambda *_: "file:///published")
+    distributed_shard(root, tmp_path / "config.toml", "fixture", 0, 1, "run", "", "file:///out", pre_staged_input=True)
+    assert seen["pre_staged"] is True
+
+def test_prestaged_input_requires_raw_and_complete_extraction_markers(tmp_path, monkeypatch):
+    cfg = {"registry": "ignored"}
+    monkeypatch.setattr("everbar_motherlode.distributed.registry", lambda _: [{"id": "gigamidi"}])
+    with pytest.raises(FileNotFoundError): validate_pre_staged_input(tmp_path, cfg, "gigamidi")
+    artifact = tmp_path / "raw" / "gigamidi" / "gigamidi.download"; artifact.parent.mkdir(parents=True); artifact.write_bytes(b"archive")
+    extracted = tmp_path / "extracted" / "gigamidi"; extracted.mkdir(parents=True); (extracted / ".complete").write_text("a" * 64)
+    with pytest.raises(RuntimeError, match="nested GigaMIDI"):
+        validate_pre_staged_input(tmp_path, cfg, "gigamidi")
+    (extracted / ".gigamidi-nested-complete").write_text("b" * 64)
+    validate_pre_staged_input(tmp_path, cfg, "gigamidi")
+
+def test_partition_worker_skips_extract_with_prestaged_input(tmp_path, monkeypatch):
+    root = tmp_path / "root"; raw = root / "raw" / "fixture" / "fixture.download"; raw.parent.mkdir(parents=True); raw.write_bytes(b"archive")
+    extracted = root / "extracted" / "fixture"; extracted.mkdir(parents=True)
+    source = {"id": "fixture", "training": "ALLOWED", "role": "raw"}
+    monkeypatch.setattr("everbar_motherlode.core.registry", lambda cfg: [source])
+    monkeypatch.setattr("everbar_motherlode.core.extract", lambda *_: pytest.fail("must not extract pre-staged input"))
+    monkeypatch.setattr("everbar_motherlode.core.derive", lambda *args, **kwargs: {"pieces": 0, "tracks": 0, "candidates": 0, "accepts": 0, "rejects": 0})
+    result = shard(root, {"registry": "ignored"}, ["fixture"], pre_staged=True)
+    assert result["state"] == "COMPLETE"
 
 def test_direct_s3_uri_requires_remote_and_bucket():
     assert _direct_s3_parts("direct-s3://evacuate/everbar-output/runs/a") == ("evacuate", "everbar-output", "runs/a")

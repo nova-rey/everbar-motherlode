@@ -423,7 +423,7 @@ def monitor(root:Path,cfg:dict,interval:int=300,pid:int|None=None):
             except ProcessLookupError: break
         time.sleep(max(5,interval))
     return progress(root,cfg,"PARTIAL","MONITOR_COMPLETE")
-def shard(root:Path,cfg:dict,dataset_ids:list[str],partition_index:int=0,partitions:int=1):
+def shard(root:Path,cfg:dict,dataset_ids:list[str],partition_index:int=0,partitions:int=1,pre_staged:bool=False):
     """Run non-overlapping source datasets in parallel without central DB locks."""
     sources={s["id"]:s for s in registry(cfg)}; results=[]
     if not 0 <= partition_index < partitions: raise ValueError("partition index is outside partition count")
@@ -434,7 +434,11 @@ def shard(root:Path,cfg:dict,dataset_ids:list[str],partition_index:int=0,partiti
         artifact=root/"raw"/dataset_id/(dataset_id+".download")
         if not artifact.exists(): raise FileNotFoundError(f"download is not ready: {dataset_id}")
         if dataset_id == "pdmx" and partition_index == 0: (root/"state"/"started").write_text(str(time.time()))
-        folder=extract(root,ds,artifact)
+        # Disposable distributed workers can mount a source tree that was
+        # fetched and extracted once per VM.  The distributed boundary checks
+        # its durable readiness markers before opting into this path; retain
+        # the historical extraction behavior for every other caller.
+        folder=root/"extracted"/dataset_id if pre_staged else extract(root,ds,artifact)
         # This label is a durable handoff boundary consumed by
         # ``distributed.stage_shard``.  Keep its fixed-width form identical to
         # the run-package name so a completed worker state is publishable.

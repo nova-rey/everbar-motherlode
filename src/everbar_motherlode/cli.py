@@ -16,7 +16,7 @@ def main(argv=None):
  p_monitor=sub.choices["monitor"]; p_monitor.add_argument("--interval",type=int,default=300); p_monitor.add_argument("--pid",type=int)
  p_shard=sub.choices["shard"]; p_shard.add_argument("--dataset",action="append",required=True); p_shard.add_argument("--partition-index",type=int,default=0); p_shard.add_argument("--partitions",type=int,default=1)
  p_sample=sub.choices["sample-brick3"]; p_sample.add_argument("--dataset",action="append",required=True); p_sample.add_argument("--limit",type=int,default=64)
- p_distributed=sub.choices["distributed-shard"]; p_distributed.add_argument("--dataset",required=True); p_distributed.add_argument("--shard-index",type=int,required=True); p_distributed.add_argument("--shard-count",type=int,required=True); p_distributed.add_argument("--run-id",required=True); p_distributed.add_argument("--input-uri",default=""); p_distributed.add_argument("--output-uri",required=True); p_distributed.add_argument("--force",action="store_true")
+ p_distributed=sub.choices["distributed-shard"]; p_distributed.add_argument("--dataset",required=True); p_distributed.add_argument("--shard-index",type=int,required=True); p_distributed.add_argument("--shard-count",type=int,required=True); p_distributed.add_argument("--run-id",required=True); p_distributed.add_argument("--input-uri",default=""); p_distributed.add_argument("--output-uri",required=True); p_distributed.add_argument("--force",action="store_true"); p_distributed.add_argument("--pre-staged-input",action="store_true",help="use a verified raw/extracted source tree already staged at --root")
  p_verify=sub.choices["verify-distributed-run"]; p_verify.add_argument("--dataset",required=True); p_verify.add_argument("--shard-count",type=int,required=True); p_verify.add_argument("--run-id",required=True); p_verify.add_argument("--output-uri",required=True)
  p_features=sub.choices["extract-features"]; p_features.add_argument("--extractor-id",default="primitive-v1")
  p_project=sub.choices["project-v2"]; p_project.add_argument("--canonical-db",type=Path,required=True); p_project.add_argument("--output-dir",type=Path,required=True)
@@ -54,7 +54,7 @@ def main(argv=None):
  if a.cmd=="sample-brick3":
   print(__import__('json').dumps(sample_brick3(a.root,cfg,a.dataset,a.limit),indent=2)); return 0
  if a.cmd=="distributed-shard":
-  print(__import__('json').dumps(distributed_shard(a.root,a.config,a.dataset,a.shard_index,a.shard_count,a.run_id,a.input_uri,a.output_uri,a.force),indent=2)); return 0
+  print(__import__('json').dumps(distributed_shard(a.root,a.config,a.dataset,a.shard_index,a.shard_count,a.run_id,a.input_uri,a.output_uri,a.force,a.pre_staged_input),indent=2)); return 0
  if a.cmd=="verify-distributed-run":
   report=verify_distributed_run(a.output_uri,a.run_id,a.dataset,a.shard_count); print(__import__('json').dumps(report,indent=2)); return 0 if report["state"] == "COMPLETE" else 1
  if a.cmd=="backfill-canonical": print(__import__('json').dumps(backfill_canonical(a.root),indent=2)); return 0

@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import urlparse
 
-from .core import config, sha, shard, writej
+from .core import config, registry, sha, shard, writej
 
 
 def _safe(value: str, name: str) -> str:
@@ -117,6 +117,35 @@ def fetch_input(input_uri: str, root: Path, dataset_id: str) -> None:
         shutil.copytree(path, destination, dirs_exist_ok=True)
     else:
         _rclone("copy", source, str(destination))
+
+
+def _ready_marker(path: Path) -> bool:
+    """Require the checksum-shaped extraction marker written by ``extract``."""
+    if not path.is_file():
+        return False
+    value = path.read_text(encoding="utf-8").strip()
+    return len(value) == 64 and all(char in "0123456789abcdef" for char in value)
+
+
+def validate_pre_staged_input(root: Path, cfg: dict, dataset_id: str) -> None:
+    """Fail closed unless a shared raw and extracted source tree is complete.
+
+    This intentionally validates only the same durable readiness markers that
+    ``core.extract`` uses to make extraction resumable.  Rehashing a large
+    archive in every worker would defeat the per-VM staging optimization.
+    """
+    source = next((item for item in registry(cfg) if item["id"] == dataset_id), None)
+    if source is None:
+        raise ValueError(f"unknown dataset: {dataset_id}")
+    artifact = root / "raw" / dataset_id / f"{dataset_id}.download"
+    if not artifact.is_file() or artifact.stat().st_size == 0:
+        raise FileNotFoundError(f"pre-staged raw artifact is unavailable: {artifact}")
+    extracted = root / "extracted" / dataset_id
+    marker = extracted / ".complete"
+    if not extracted.is_dir() or not _ready_marker(marker):
+        raise RuntimeError(f"pre-staged extraction is incomplete: {extracted}")
+    if dataset_id == "gigamidi" and not _ready_marker(extracted / ".gigamidi-nested-complete"):
+        raise RuntimeError(f"pre-staged nested GigaMIDI extraction is incomplete: {extracted}")
 
 
 def _copy_relative(root: Path, source: Path, stage: Path) -> None:
@@ -265,7 +294,7 @@ def publish_shard(stage: Path, output_uri: str, manifest: dict, force: bool = Fa
     return target
 
 
-def distributed_shard(root: Path, config_path: Path, dataset_id: str, shard_index: int, shard_count: int, run_id: str, input_uri: str, output_uri: str, force: bool = False) -> dict:
+def distributed_shard(root: Path, config_path: Path, dataset_id: str, shard_index: int, shard_count: int, run_id: str, input_uri: str, output_uri: str, force: bool = False, pre_staged_input: bool = False) -> dict:
     """Fetch, process, verify, package, and publish one independent shard."""
     # Disposable workers receive an empty run root.  ``shard`` deliberately
     # writes a small start marker before it creates its shard-local database,
@@ -274,9 +303,12 @@ def distributed_shard(root: Path, config_path: Path, dataset_id: str, shard_inde
     (root / "state").mkdir(parents=True, exist_ok=True)
     (root / "progress" / "shards").mkdir(parents=True, exist_ok=True)
     cfg = config(config_path)
-    fetch_input(input_uri, root, dataset_id)
+    if pre_staged_input:
+        validate_pre_staged_input(root, cfg, dataset_id)
+    else:
+        fetch_input(input_uri, root, dataset_id)
     started = time.time()
-    result = shard(root, cfg, [dataset_id], shard_index, shard_count)
+    result = shard(root, cfg, [dataset_id], shard_index, shard_count, pre_staged=pre_staged_input)
     stage, manifest = stage_shard(root, cfg, dataset_id, shard_index, shard_count, run_id, result)
     manifest["elapsed_seconds"] = round(time.time() - started, 3)
     manifest["output_bytes"] = sum(p.stat().st_size for p in stage.rglob("*") if p.is_file())
