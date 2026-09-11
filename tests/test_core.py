@@ -174,6 +174,40 @@ def test_single_and_two_shards_have_identical_candidate_coverage(tmp_path, monke
     sharded_converted={p.name:p.read_bytes() for p in (sharded/"derived"/"fixture"/"prebrick3").glob("*.mid")}
     assert one == two and len(one) == 4 and single_bytes == sharded_bytes and single_converted == sharded_converted
 
+def test_derive_strips_illegal_realtime_messages_without_changing_note_timing(tmp_path, monkeypatch):
+    """GigaMIDI occasionally embeds realtime bytes in otherwise valid SMFs."""
+    import mido
+
+    folder=tmp_path/"source"; folder.mkdir(); normal=folder/"normal.mid"
+    midi=mido.MidiFile(type=1,ticks_per_beat=480); track=mido.MidiTrack(); midi.tracks.append(track)
+    track.extend([mido.Message("note_on",note=60,velocity=80,time=0),mido.Message("note_off",note=60,velocity=0,time=240)])
+    midi.save(normal)
+    # Insert a zero-delta MIDI Clock status byte into the track payload. Mido
+    # can parse this malformed-in-SMF source but refuses a direct track copy.
+    raw=bytearray(normal.read_bytes()); track_start=raw.index(b"MTrk"); size=int.from_bytes(raw[track_start+4:track_start+8],"big")
+    payload=raw[track_start+8:track_start+8+size]; note_off=bytes([0x81,0x70,0x80,0x3c,0x00]); offset=payload.index(note_off)
+    payload=payload[:offset]+bytes([0x00,0xF8])+payload[offset:]
+    raw[track_start+4:track_start+8]=len(payload).to_bytes(4,"big")
+    raw[track_start+8:track_start+8+size]=payload
+    realtime=folder/"realtime.mid"; realtime.write_bytes(raw); normal.unlink()
+    with pytest.raises(ValueError,match="realtime messages"):
+        mido.MidiFile(realtime).save(tmp_path/"direct-copy-fails.mid")
+    flattened,counts=performance_flattening_v1(mido.MidiFile(realtime))
+    flattened.save(tmp_path/"flattened-realtime.mid")
+    assert counts["realtime_messages_discarded"]==1
+    monkeypatch.setattr("everbar_motherlode.core.subprocess.run",lambda *args,**kwargs: SimpleNamespace(returncode=0,stdout=json.dumps({"canonical":{"event_sha256":"fixture"}}),stderr=""))
+    root=tmp_path/"root"; c=db(root)
+    derive(root,c,{"id":"fixture","training":"ALLOWED","role":"raw"},folder,{"everbar_sha":"fixture","everbar_checkout":"/fixture"}); c.commit(); c.close()
+    derived=sorted((root/"derived"/"fixture").glob("*.mid"))
+    assert len(derived)==1
+    repaired=derived[0]
+    events=[]; tick=0
+    for message in mido.MidiFile(repaired).tracks[0]:
+        tick+=message.time
+        if message.type in {"note_on","note_off"}: events.append((message.type,message.note,tick))
+        assert not message.is_realtime
+    assert events==[("note_on",60,0),("note_off",60,240)]
+
 def test_v1_accept_keeps_v2_piece_siblings_and_drum_inventory(tmp_path, monkeypatch):
     import mido
     folder=tmp_path/"source"; folder.mkdir(); midi=mido.MidiFile()
@@ -275,7 +309,7 @@ def test_performance_flattening_renders_pedals_and_drops_noops():
     assert (20,60) in offs and (45,62) in offs
     assert not any(getattr(msg,"control",None) in {64,66,67} for _,msg in events)
     assert not any(getattr(msg,"note",None)==70 for _,msg in events)
-    assert counts == {"cc64_rendered":2,"cc66_rendered":2,"cc67_discarded":1,"cc121_resets_consumed":0,"zero_duration_notes_dropped":1,"end_of_track_noteoffs":0}
+    assert counts == {"cc64_rendered":2,"cc66_rendered":2,"cc67_discarded":1,"cc121_resets_consumed":0,"realtime_messages_discarded":0,"zero_duration_notes_dropped":1,"end_of_track_noteoffs":0}
 def test_performance_flattening_consumes_cc121_at_exact_tick():
     import mido
     source=mido.MidiFile(); track=mido.MidiTrack(); source.tracks.append(track)

@@ -135,7 +135,7 @@ def performance_flattening_v1(mid):
     """
     import mido
     result=mido.MidiFile(type=mid.type,ticks_per_beat=mid.ticks_per_beat)
-    counts={"cc64_rendered":0,"cc66_rendered":0,"cc67_discarded":0,"cc121_resets_consumed":0,"zero_duration_notes_dropped":0,"end_of_track_noteoffs":0}
+    counts={"cc64_rendered":0,"cc66_rendered":0,"cc67_discarded":0,"cc121_resets_consumed":0,"realtime_messages_discarded":0,"zero_duration_notes_dropped":0,"end_of_track_noteoffs":0}
     for track in mid.tracks:
         absolute=0; sequence=0; events=[]; active={}; deferred=[]; sustain={}; sostenuto={}; eot=None; last_tick=0
         def emit(tick,msg):
@@ -149,6 +149,11 @@ def performance_flattening_v1(mid):
         for msg in track:
             absolute+=msg.time; last_tick=max(last_tick,absolute)
             if msg.type=="end_of_track": eot=(absolute,msg); continue
+            if msg.is_realtime:
+                # SMF forbids these transport events. The absolute-tick
+                # representation below preserves their elapsed time without
+                # allowing an unserializable message into the derivative.
+                counts["realtime_messages_discarded"]+=1; continue
             channel=getattr(msg,"channel",None)
             if msg.type=="control_change" and msg.control in {64,66,67,121}:
                 if msg.control==67: counts["cc67_discarded"]+=1; continue
@@ -343,6 +348,33 @@ def brick3_command(cfg: dict, input_path: Path, output_root: Path, dataset_id: s
             raise RuntimeError(f"pinned Everbar CLI is unavailable: {executable}")
         return [str(executable), *common]
     raise ValueError(f"unknown Brick 3 runner mode: {mode}")
+
+def serializable_track_v1(track):
+    """Copy a source track while removing MIDI realtime transport events.
+
+    Standard MIDI Files cannot encode realtime messages such as Clock or
+    Start. Some GigaMIDI source files nevertheless contain them. They carry
+    no score semantics, but their delta ticks still contribute to the timeline,
+    so defer those ticks onto the next serializable event (or end-of-track).
+    The immutable raw source remains unchanged and is still used for source
+    inventory/provenance.
+    """
+    import mido
+    copied=mido.MidiTrack()
+    deferred_ticks=0; discarded=0
+    for message in track:
+        if message.is_realtime:
+            deferred_ticks+=int(message.time); discarded+=1
+            continue
+        copied.append(message.copy(time=int(message.time)+deferred_ticks))
+        deferred_ticks=0
+    if deferred_ticks:
+        if copied and copied[-1].type=="end_of_track":
+            copied[-1].time+=deferred_ticks
+        else:
+            copied.append(mido.MetaMessage("end_of_track",time=deferred_ticks))
+    return copied,discarded
+
 def derive(root:Path,c,ds:dict,folder:Path,cfg:dict,partition_index:int=0,partitions:int=1):
     import mido
     result={"pieces":0,"tracks":0,"candidates":0,"accepts":0,"rejects":0}
@@ -381,9 +413,10 @@ def derive(root:Path,c,ds:dict,folder:Path,cfg:dict,partition_index:int=0,partit
             trackid=inventory["source_track_id"]; programs=inventory["programs"]; drum=inventory["is_drum"]; name=inventory["source_track_name"]
             if drum or not inventory["has_notes"]: continue
             cand=stable("v1",trackid,raw_hash); out=root/"derived"/ds["id"]/(cand+".mid"); out.parent.mkdir(parents=True,exist_ok=True)
-            one=mido.MidiFile(type=1,ticks_per_beat=mid.ticks_per_beat); one.tracks.append(track.copy()); one.save(out)
+            serializable_track,realtime_discarded=serializable_track_v1(track)
+            one=mido.MidiFile(type=1,ticks_per_beat=mid.ticks_per_beat); one.tracks.append(serializable_track); one.save(out)
             brick3_input,conversion=convert_for_brick3(root,ds,out,cand)
-            provenance={"dataset_version":ds.get("version"),"source_piece_id":piece,"source_track_id":trackid,"sibling_track_ids":[entry["source_track_id"] for entry in track_inventory if entry["source_track_id"]!=trackid],"programs":programs,"is_drum":False,"source_track_name":name,"source_native_role":inventory["source_native_role"],"source_timing":source_timing,"source_relative_path":relative,"source_artifact_id":artifact_id}
+            provenance={"dataset_version":ds.get("version"),"source_piece_id":piece,"source_track_id":trackid,"sibling_track_ids":[entry["source_track_id"] for entry in track_inventory if entry["source_track_id"]!=trackid],"programs":programs,"is_drum":False,"source_track_name":name,"source_native_role":inventory["source_native_role"],"source_timing":source_timing,"source_relative_path":relative,"source_artifact_id":artifact_id,"source_normalization":{"policy_id":"smf-realtime-normalization-v1","realtime_messages_discarded":realtime_discarded}}
             c.execute("insert or replace into items values(?,?,?,?,?,?,?)",(cand,ds["id"],"DERIVED",str(out),None,raw_hash,json.dumps({"provenance":provenance,"conversion":conversion})))
             result["candidates"]+=1
             # Exact pinned boundary: upstream process owns acceptance semantics.

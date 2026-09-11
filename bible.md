@@ -353,3 +353,13 @@ then skips per-worker fetch/extraction while retaining the historical default
 path unchanged.  This permits a VM to stage one verified source tree and serve
 isolated deterministic shard workers without changing Brick 3, ownership, or
 completion-marker semantics.
+
+## 2026-09-11 — GigaMIDI realtime-message recovery
+
+The V1-derived single-track writer now removes only MIDI realtime transport
+messages from malformed-in-SMF GigaMIDI tracks while preserving their delta
+ticks on the next serializable event or end-of-track. Immutable raw source
+bytes and source inventory remain untouched. A regression fixture proves the
+previous Mido serialization failure and verifies preserved note timing after
+derivation. The pre-Brick-3 flattening boundary also counts and drops this
+same prohibited transport-only class as defense in depth.

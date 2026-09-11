@@ -7,7 +7,10 @@ and unflattened derived candidate.
 
 ## Rules
 
-- Preserve the raw source artifact and the initial derived V1 MIDI unchanged.
+- Preserve the raw source artifact unchanged. The initial derived V1 MIDI is
+  unchanged except that malformed-in-SMF realtime transport messages are
+  removed while their delta ticks are retained on the next serializable event
+  (or end-of-track); Standard MIDI Files cannot encode those messages.
 - Render CC64 sustain into delayed note-off lifetimes.
 - Render CC66 sostenuto into delayed note-off lifetimes for notes sounding when
   the pedal is engaged.
@@ -15,6 +18,9 @@ and unflattened derived candidate.
   channel's sustain/sostenuto state and latches, release any pedal-deferred
   note-offs at that tick, then remove the reset event from the V1 derivative.
 - Discard CC67 soft-pedal events because V1 has no representable equivalent.
+- Discard realtime transport events such as MIDI Clock and Start because they
+  have no score semantics and Mido correctly refuses to serialize them in an
+  SMF derivative.
 - Drop a note-on/note-off pair only when it is verified to have zero duration.
 - Preserve all other events and leave every remaining Brick 3 decision to the
   pinned Everbar authority.
@@ -28,6 +34,7 @@ For every candidate, Motherlode writes
 - source candidate and output paths;
 - SHA-256 hashes of the unflattened and flattened MIDI bytes;
 - counts for CC64/CC66 render operations, CC67 removals, CC121 resets,
+  discarded realtime transport messages,
   zero-duration drops, and any end-of-track note-off flushes; and
 - a receipt hash.
 
