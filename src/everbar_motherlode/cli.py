@@ -10,6 +10,14 @@ from .v2_projection import project_stream, write_projection
 def main(argv=None):
  p=argparse.ArgumentParser(); sub=p.add_subparsers(dest="cmd",required=True)
  for x in ("preflight","build","status","reconcile","prefetch","monitor","shard","merge-shards","sample-brick3","distributed-shard","verify-distributed-run","backfill-canonical","extract-features","project-v2","characterize-v2"): q=sub.add_parser(x); q.add_argument("--root",type=Path,required=True); q.add_argument("--config",type=Path,default=Path("configs/motherlode-v1.toml")); q.add_argument("--resume",action="store_true"); q.add_argument("--detach",action="store_true")
+ p_stream=sub.add_parser("stream-consolidate")
+ p_stream.add_argument("--workspace", type=Path, required=True)
+ p_stream.add_argument("--source-uri", required=True, help="immutable completed distributed-shard package root")
+ p_stream.add_argument("--output-uri", required=True, help="durable destination root for compact canonical partitions")
+ p_stream.add_argument("--run-id", required=True)
+ p_stream.add_argument("--dataset", required=True)
+ p_stream.add_argument("--shard-count", type=int, required=True)
+ p_stream.add_argument("--consolidation-id", required=True)
  p_snapshot=sub.add_parser("snapshot-preview"); p_snapshot.add_argument("--motherlode-root",type=Path,required=True); p_snapshot.add_argument("--output-root",type=Path,required=True); p_snapshot.add_argument("--everbar-checkout",type=Path,required=True); p_snapshot.add_argument("--motherlode-sha",required=True); p_snapshot.add_argument("--snapshot-name"); p_snapshot.add_argument("--snapshot-scope",default="EV1_PREVIEW_ONLY"); p_snapshot.add_argument("--everbar-sha")
  p_sidecar=sub.add_parser("build-v2-sidecar"); p_sidecar.add_argument("--base-snapshot",type=Path,required=True); p_sidecar.add_argument("--canonical-db",type=Path,required=True); p_sidecar.add_argument("--output-dir",type=Path,required=True)
  p_prefetch=sub.choices["prefetch"]; p_prefetch.add_argument("--workers",type=int,default=3)
@@ -28,6 +36,9 @@ def main(argv=None):
  if a.cmd=="build-v2-sidecar":
   from .v2_sidecar import build_derived_sidecar
   print(__import__('json').dumps(build_derived_sidecar(base_snapshot=a.base_snapshot, canonical_db=a.canonical_db, output_dir=a.output_dir), indent=2, sort_keys=True)); return 0
+ if a.cmd=="stream-consolidate":
+  from .streaming_consolidation import stream_consolidate
+  print(__import__('json').dumps(stream_consolidate(workspace=a.workspace, source_uri=a.source_uri, output_uri=a.output_uri, run_id=a.run_id, dataset_id=a.dataset, shard_count=a.shard_count, consolidation_id=a.consolidation_id), indent=2, sort_keys=True)); return 0
  cfg=config(a.config)
  if a.cmd=="preflight": print(__import__('json').dumps(preflight(a.root,cfg),indent=2)); return 0
  if a.cmd=="status": print(__import__('json').dumps(progress(a.root,cfg),indent=2)); return 0

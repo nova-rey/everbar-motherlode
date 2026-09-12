@@ -2,6 +2,20 @@
 
 Append-only engineering record.
 
+## 2026-09-12 — R2 streaming canonical consolidation
+
+Added `stream-consolidate`, an explicit alternative to the historical
+monolithic `merge-shards` path for completed distributed packages too large to
+fit together on the recovery host. It verifies each immutable completion
+marker, item-ID ledger, worker receipt, and SQLite integrity check; downloads
+only one shard database at a time; materializes compact canonical partitions
+from stored Brick-3 receipts only; preserves source/sibling provenance and
+canonical dedupe evidence; uploads and hash-verifies every artifact before
+removing successful temporary copies. The source packages remain immutable,
+raw MIDI is never reopened, and Brick 3 is never invoked. The durable
+canonical-hash index and per-shard completion markers make the operation
+resumable without replaying an already verified compact partition.
+
 ## 2026-08-21 — Brick 3 receipt identity repair
 
 Corrected Motherlode’s canonical hash extraction to use Everbar Brick 3’s authoritative `canonical.event_sha256` field. Added a resumable `reconcile` command that backfills existing immutable receipts, and ensured `--resume` skips completed datasets instead of reprocessing them.
