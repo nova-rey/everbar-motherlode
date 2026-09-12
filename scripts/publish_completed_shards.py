@@ -17,10 +17,18 @@ import time
 from pathlib import Path
 
 from everbar_motherlode.core import config, sha, writej
-from everbar_motherlode.distributed import output_prefix, publish_shard, stage_shard
+from everbar_motherlode.distributed import (
+    _direct_s3_exists,
+    _direct_s3_read,
+    output_prefix,
+    publish_shard,
+    stage_shard,
+)
 
 
 def _read_completion(uri: str) -> bytes:
+    if uri.startswith("direct-s3://"):
+        return _direct_s3_read(uri).encode()
     for attempt in range(3):
         completed = subprocess.run(["rclone", "cat", uri], capture_output=True)
         if completed.returncode == 0:
@@ -32,6 +40,8 @@ def _read_completion(uri: str) -> bytes:
 
 
 def _remote_completion_exists(uri: str) -> bool:
+    if uri.startswith("direct-s3://"):
+        return _direct_s3_exists(uri)
     completed = subprocess.run(["rclone", "lsf", uri], capture_output=True, text=True)
     if completed.returncode == 0:
         return bool(completed.stdout.strip())

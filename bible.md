@@ -386,3 +386,5 @@ immutable distributed-shard contract, compares the remote completion marker
 byte-for-byte, and removes only its temporary outbox copy after verification.
 It never invokes shard processing or deletes source, derived, receipt, or
 worker-state data.
+The utility also dispatches its preflight to the same direct-S3 client as its
+publisher when legacy rclone upload support is unavailable.
