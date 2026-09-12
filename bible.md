@@ -377,3 +377,12 @@ bytes and source inventory remain untouched. A regression fixture proves the
 previous Mido serialization failure and verifies preserved note timing after
 derivation. The pre-Brick-3 flattening boundary also counts and drops this
 same prohibited transport-only class as defense in depth.
+
+## 2026-09-12 — Bounded publication of completed local shards
+
+Added a receipt-only publication utility for pre-existing COMPLETE shard
+states. It packages and uploads one shard at a time using the established
+immutable distributed-shard contract, compares the remote completion marker
+byte-for-byte, and removes only its temporary outbox copy after verification.
+It never invokes shard processing or deletes source, derived, receipt, or
+worker-state data.
