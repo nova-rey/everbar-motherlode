@@ -53,6 +53,7 @@ For each shard, the command writes:
 ```
 consolidations/<consolidation-id>/<dataset>/shard-00000-of-<count>/
   canonical.sqlite
+  receipt-reconciliation.json
   manifest.json
   completion.json
 consolidations/<consolidation-id>/canonical-index.sqlite
@@ -78,3 +79,18 @@ invoke Brick 3, alter corpus policy, mutate distributed packages, or delete
 any source package. It is not yet a training snapshot builder; a later,
 separate view builder must consume the compact partitions and their dedupe
 ledger.
+
+## Brick-3 receipt reconciliation
+
+`stream-consolidate` treats the immutable `receipt.decision.status` as the
+admission authority. A process exit code only proves that the Brick-3 command
+completed; it never implies `ACCEPT`. Historical rows whose cached `brick3`
+field says `ACCEPT` but whose receipt says `REJECT` are excluded from the
+compact canonical partition. The source shard package is not modified.
+
+Each compact output includes `receipt-reconciliation.json`, binding the source
+completion/database hashes and reporting explicit rejects, legacy reject rows
+without a structured receipt, and the count/hash of historically false-accepted
+rows reclassified as rejects. A cached accepted row with a missing/malformed
+decision or an accepted canonical-hash disagreement fails closed rather than
+silently losing or admitting a stream.

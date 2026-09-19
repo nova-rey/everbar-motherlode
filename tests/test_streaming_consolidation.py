@@ -21,6 +21,7 @@ def _detail(canonical_hash: str, stream_id: str) -> dict:
         "receipt": {
             "receipt_sha256": f"receipt-{stream_id}", "policy_id": "corpus-policy-v1",
             "policy_sha256": "policy", "language_id": "pertok-v1", "language_sha256": "language",
+            "decision": {"status": "ACCEPT"},
             "canonical": {
                 "event_sha256": canonical_hash,
                 "score": {
@@ -95,3 +96,43 @@ def test_streaming_consolidation_fails_closed_on_item_ledger_mismatch(tmp_path: 
             shard_count=2, consolidation_id="fixture-consolidation",
         )
     assert not (tmp_path / "output" / "consolidations" / "fixture-consolidation" / "fixture" / "shard-00000-of-00002" / "completion.json").exists()
+
+
+def test_streaming_consolidation_receipt_reconciles_historical_false_accept(tmp_path: Path):
+    _package(tmp_path, 0, [("stream-a", "hash-a")])
+    _package(tmp_path, 1, [("stream-b", "hash-b")])
+    source_db = tmp_path / "source" / "runs" / "run-a" / "fixture" / "shard-00000-of-00002" / "shard.sqlite"
+    conn = sqlite3.connect(source_db)
+    detail = json.loads(conn.execute("select detail from items where id='stream-a'").fetchone()[0])
+    detail["receipt"]["decision"] = {"status": "REJECT"}
+    conn.execute("update items set canonical_hash=NULL, detail=? where id='stream-a'", (json.dumps(detail),))
+    conn.commit(); conn.close()
+    report = stream_consolidate(
+        workspace=tmp_path / "workspace", source_uri="file://" + str(tmp_path / "source"),
+        output_uri="file://" + str(tmp_path / "output"), run_id="run-a", dataset_id="fixture",
+        shard_count=2, consolidation_id="fixture-consolidation",
+    )
+    assert report["outcomes"][0]["reclassified_rejects"] == 1
+    compact = sqlite3.connect(tmp_path / "output" / "consolidations" / "fixture-consolidation" / "fixture" / "shard-00000-of-00002" / "canonical.sqlite")
+    assert compact.execute("select count(*) from canonical_streams").fetchone()[0] == 0
+    compact.close()
+    reconciliation = json.loads((tmp_path / "output" / "consolidations" / "fixture-consolidation" / "fixture" / "shard-00000-of-00002" / "receipt-reconciliation.json").read_text())
+    assert reconciliation["summary"]["reclassified_rejects"] == 1
+    assert reconciliation["used_raw_midi"] is False and reconciliation["used_brick3"] is False
+
+
+def test_streaming_consolidation_fails_closed_on_false_accept_without_decision(tmp_path: Path):
+    _package(tmp_path, 0, [("stream-a", "hash-a")])
+    _package(tmp_path, 1, [("stream-b", "hash-b")])
+    source_db = tmp_path / "source" / "runs" / "run-a" / "fixture" / "shard-00000-of-00002" / "shard.sqlite"
+    conn = sqlite3.connect(source_db)
+    detail = json.loads(conn.execute("select detail from items where id='stream-a'").fetchone()[0])
+    detail["receipt"].pop("decision")
+    conn.execute("update items set detail=? where id='stream-a'", (json.dumps(detail),))
+    conn.commit(); conn.close()
+    with pytest.raises(PackageVerificationError, match="no explicit Brick-3 decision"):
+        stream_consolidate(
+            workspace=tmp_path / "workspace", source_uri="file://" + str(tmp_path / "source"),
+            output_uri="file://" + str(tmp_path / "output"), run_id="run-a", dataset_id="fixture",
+            shard_count=2, consolidation_id="fixture-consolidation",
+        )

@@ -10,6 +10,22 @@ STAGES = ["DISCOVERED","LICENSE_VERIFIED","DOWNLOAD_PENDING","DOWNLOADING","DOWN
 TERMINAL = {"FAILED","RESOURCE_PAUSED","GATED_USER_ACTION_REQUIRED"}
 def sha(b: bytes|str) -> str: return hashlib.sha256(b if isinstance(b,bytes) else b.encode()).hexdigest()
 def stable(kind: str, *parts: object) -> str: return f"{kind}_{sha(json.dumps(parts,sort_keys=True,separators=(',',':')))[:24]}"
+def brick3_receipt_decision_status(receipt: Any) -> str | None:
+    """Return the upstream Brick-3 decision, never inferring it from exit code.
+
+    Brick 3 returns a JSON receipt for both accepted and rejected candidates.
+    A zero process exit only says that the inspection completed successfully;
+    it is not an admission decision.  Callers must fail closed when a receipt
+    lacks this explicit status rather than treating a convenient process result
+    as corpus authority.
+    """
+    if not isinstance(receipt, dict):
+        return None
+    decision = receipt.get("decision")
+    if not isinstance(decision, dict):
+        return None
+    status = decision.get("status")
+    return status if status in {"ACCEPT", "REJECT"} else None
 def writej(path: Path, data: Any):
     path.parent.mkdir(parents=True,exist_ok=True); tmp=path.with_suffix(path.suffix+".tmp"); tmp.write_text(json.dumps(data,indent=2,sort_keys=True)+"\n"); tmp.replace(path)
 def config(path: Path) -> dict:
@@ -422,14 +438,27 @@ def derive(root:Path,c,ds:dict,folder:Path,cfg:dict,partition_index:int=0,partit
             # Exact pinned boundary: upstream process owns acceptance semantics.
             cmd=brick3_command(cfg,brick3_input,brick3_input.parent,ds["id"])
             run=subprocess.run(cmd,capture_output=True,text=True,timeout=120,cwd=cfg["everbar_checkout"])
+            receipt=None
             if run.returncode==0 and run.stdout.strip():
-                receipt=json.loads(run.stdout.splitlines()[-1]); canonical=receipt.get("canonical_score_sha256") or ((receipt.get("canonical") or {}).get("event_sha256"))
+                try:
+                    receipt=json.loads(run.stdout.splitlines()[-1])
+                except json.JSONDecodeError:
+                    receipt=None
+            canonical=(receipt or {}).get("canonical_score_sha256") or (((receipt or {}).get("canonical") or {}).get("event_sha256"))
+            if brick3_receipt_decision_status(receipt)=="ACCEPT" and canonical:
                 existing=json.loads(c.execute("select detail from items where id=?",(cand,)).fetchone()[0])
                 final={**existing,"brick3":"ACCEPT","everbar_sha":cfg["everbar_sha"],"conversion":conversion,"receipt":receipt}
                 c.execute("update items set state=?,canonical_hash=?,detail=? where id=?",("BRICK3_COMPLETE",canonical,json.dumps(final),cand)); materialize_canonical_stream(c,stream_id=cand,dataset_id=ds["id"],detail=final); result["accepts"]+=1
             else:
                 existing=json.loads(c.execute("select detail from items where id=?",(cand,)).fetchone()[0])
-                c.execute("update items set state=?,detail=? where id=?",("BRICK3_COMPLETE",json.dumps({**existing,"brick3":"REJECT","everbar_sha":cfg["everbar_sha"],"conversion":conversion,"diagnostics":run.stderr[-2000:]}),cand)); result["rejects"]+=1
+                diagnostics=run.stderr[-2000:]
+                if run.returncode==0 and receipt is not None and brick3_receipt_decision_status(receipt)!="REJECT":
+                    diagnostics=(diagnostics+"\ninvalid Brick-3 receipt: missing explicit ACCEPT/REJECT decision or accepted canonical hash")[-2000:]
+                final={**existing,"brick3":"REJECT","everbar_sha":cfg["everbar_sha"],"conversion":conversion,"diagnostics":diagnostics}
+                # Retain a parsed reject receipt for receipt-only audit and
+                # reconciliation.  This never re-runs Brick 3.
+                if receipt is not None: final["receipt"]=receipt
+                c.execute("update items set state=?,detail=? where id=?",("BRICK3_COMPLETE",json.dumps(final),cand)); result["rejects"]+=1
     return result
 def progress(root:Path,cfg:dict,state="RUNNING",stage="DISCOVERY"):
     c=db(root); datasets=c.execute("select state,data from datasets").fetchall(); items=c.execute("select state,canonical_hash from items").fetchall(); c.close(); raw=sum(p.stat().st_size for p in (root/"raw").rglob("*") if p.is_file()); starts=(root/"state"/"started"); elapsed=max(1,time.time()-float(starts.read_text())) if starts.exists() else 1

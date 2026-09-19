@@ -2,7 +2,7 @@ import io, json, os, sqlite3, subprocess, tarfile, zipfile
 from pathlib import Path
 from types import SimpleNamespace
 import pytest
-from everbar_motherlode.core import config, init, partition_for, preflight, stable, extract, db, derive, performance_flattening_v1, progress, reconcile, shard, writej, _pdmx_partition_files, _partition_manifest_files, brick3_command
+from everbar_motherlode.core import config, init, partition_for, preflight, stable, extract, db, derive, performance_flattening_v1, progress, reconcile, shard, writej, _pdmx_partition_files, _partition_manifest_files, brick3_command, brick3_receipt_decision_status
 from everbar_motherlode.distributed import _direct_s3_parts, distributed_shard, output_prefix, publish_shard, shard_label, stage_shard, validate_pre_staged_input, verify_distributed_run
 from everbar_motherlode.feature_base import backfill_canonical, extract_primitive_features
 
@@ -48,6 +48,27 @@ def test_direct_brick3_runner_is_checkout_bound_and_fails_closed(tmp_path):
     command=brick3_command({"everbar_checkout":str(checkout),"brick3_runner":"direct-venv"},tmp_path/"input.mid",tmp_path,"fixture")
     assert command == [str(cli),str(tmp_path/"input.mid"),"--root",str(tmp_path),"--corpus-id","fixture"]
     with pytest.raises(RuntimeError): brick3_command({"everbar_checkout":str(tmp_path/"missing"),"brick3_runner":"direct-venv"},tmp_path/"input.mid",tmp_path,"fixture")
+
+
+def test_brick3_receipt_decision_is_not_inferred_from_process_exit(tmp_path, monkeypatch):
+    import mido
+    root = tmp_path / "root"; folder = tmp_path / "source"; folder.mkdir()
+    midi = mido.MidiFile(ticks_per_beat=480); track = mido.MidiTrack(); midi.tracks.append(track)
+    track.extend([mido.Message("program_change", program=0, time=0), mido.Message("note_on", note=60, velocity=90, time=0), mido.Message("note_off", note=60, velocity=0, time=480)])
+    midi.save(folder / "piece.mid")
+    receipt = {"decision": {"status": "REJECT"}, "canonical": None, "receipt_sha256": "reject-receipt"}
+    monkeypatch.setattr("everbar_motherlode.core.brick3_command", lambda *_: ["fixture-brick3"])
+    monkeypatch.setattr("everbar_motherlode.core.subprocess.run", lambda *_, **__: SimpleNamespace(returncode=0, stdout=json.dumps(receipt) + "\n", stderr=""))
+    conn = db(root)
+    result = derive(root, conn, {"id": "fixture", "version": "v1"}, folder, {"everbar_sha": "fixture", "everbar_checkout": str(tmp_path)})
+    conn.commit()
+    state, canonical_hash, detail_json = conn.execute("select state,canonical_hash,detail from items").fetchone()
+    conn.close()
+    detail = json.loads(detail_json)
+    assert result == {"pieces": 1, "tracks": 1, "candidates": 1, "accepts": 0, "rejects": 1}
+    assert (state, canonical_hash, detail["brick3"], detail["receipt"]["decision"]["status"]) == ("BRICK3_COMPLETE", None, "REJECT", "REJECT")
+    assert brick3_receipt_decision_status(receipt) == "REJECT"
+    assert brick3_receipt_decision_status({"canonical": {}}) is None
 def test_distributed_stage_is_run_scoped_and_retry_safe(tmp_path):
     c=cfg(); root=tmp_path/"root"; label=shard_label("pop909",1,2); shard_root=root/"state"/"shards"/label/"state"; shard_root.mkdir(parents=True)
     candidate=root/"derived"/"pop909"/"v1_x.mid"; candidate.parent.mkdir(parents=True); candidate.write_bytes(b"candidate")

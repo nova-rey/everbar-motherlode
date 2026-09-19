@@ -388,3 +388,14 @@ It never invokes shard processing or deletes source, derived, receipt, or
 worker-state data.
 The utility also dispatches its preflight to the same direct-S3 client as its
 publisher when legacy rclone upload support is unavailable.
+
+## 2026-09-19 — Brick-3 receipt-authoritative reconciliation
+
+Brick 3 process success now means only that inspection ran. Corpus acceptance
+is derived solely from immutable `receipt.decision.status`, with an accepted
+canonical event hash required for admission. The streaming GigaMIDI
+consolidator performs receipt-only reconciliation against historical shard
+SQLite data, emits a hash-bound reconciliation receipt per compact partition,
+excludes cached false accepts whose upstream decision was `REJECT`, and fails
+closed for malformed purported accepts. Neither raw MIDI nor Brick 3 is
+reopened, and immutable distributed source packages remain unchanged.

@@ -21,12 +21,13 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from .core import sha, writej
+from .core import brick3_receipt_decision_status, sha, writej
 from .distributed import _direct_s3_exists, _direct_s3_key, _direct_s3_read, _direct_s3_write
 from .feature_base import ensure_feature_schema, materialize_canonical_stream
 
 
-POLICY_ID = "streaming-canonical-consolidation-v1"
+POLICY_ID = "streaming-canonical-consolidation-v2-receipt-authoritative"
+RECONCILIATION_POLICY_ID = "brick3-receipt-reconciliation-v1"
 
 
 class PackageVerificationError(RuntimeError):
@@ -222,7 +223,7 @@ def _copy_source_provenance(source: sqlite3.Connection, compact: sqlite3.Connect
             compact.executemany(f"insert or replace into {table} values({placeholders})", rows)
 
 
-def _project_partition(source_db: Path, compact_db: Path, index: sqlite3.Connection, dataset_id: str, shard_id: str) -> dict[str, int]:
+def _project_partition(source_db: Path, compact_db: Path, index: sqlite3.Connection, dataset_id: str, shard_id: str) -> tuple[dict[str, int | str], dict[str, Any]]:
     """Materialize receipt-backed canonical rows, retaining one score per hash."""
     source = sqlite3.connect(f"file:{source_db}?mode=ro", uri=True)
     compact = sqlite3.connect(compact_db)
@@ -230,16 +231,40 @@ def _project_partition(source_db: Path, compact_db: Path, index: sqlite3.Connect
         _compact_schema(compact)
         _copy_source_provenance(source, compact)
         accepted = unique = duplicates = malformed = 0
-        for stream_id, item_dataset, detail_json in source.execute("select id,dataset_id,detail from items where state='BRICK3_COMPLETE' order by id"):
+        explicit_rejects = legacy_rejects = reclassified_rejects = 0
+        reclassified_ids: list[str] = []
+        for stream_id, item_dataset, item_canonical_hash, detail_json in source.execute("select id,dataset_id,canonical_hash,detail from items where state='BRICK3_COMPLETE' order by id"):
             try:
                 detail = json.loads(detail_json)
-                if detail.get("brick3") != "ACCEPT":
+                historical_status=detail.get("brick3")
+                receipt=detail.get("receipt")
+                receipt_status=brick3_receipt_decision_status(receipt)
+                if receipt_status == "REJECT":
+                    explicit_rejects += 1
+                    if historical_status == "ACCEPT":
+                        reclassified_rejects += 1
+                        reclassified_ids.append(stream_id)
                     continue
-                receipt = detail.get("receipt") or {}
+                if receipt_status is None:
+                    if historical_status == "REJECT":
+                        # Older explicitly rejected rows did not always retain
+                        # a structured receipt.  They remain reject-only and
+                        # cannot be silently promoted.
+                        legacy_rejects += 1
+                        continue
+                    if historical_status == "ACCEPT":
+                        raise ValueError("accepted historical row has no explicit Brick-3 decision")
+                    continue
+                if receipt_status != "ACCEPT":
+                    raise ValueError(f"unsupported Brick-3 decision status: {receipt_status!r}")
+                if historical_status not in {"ACCEPT", "REJECT", None}:
+                    raise ValueError(f"invalid historical Brick-3 cache status: {historical_status!r}")
                 canonical = receipt.get("canonical") or {}
                 canonical_hash = canonical.get("event_sha256")
                 if not canonical_hash:
                     raise ValueError("accepted receipt has no canonical event hash")
+                if item_canonical_hash not in {None, canonical_hash}:
+                    raise ValueError("item canonical hash disagrees with accepted receipt")
                 accepted += 1
                 previous = index.execute("select kept_stream_id,kept_shard_id from canonical_hashes where canonical_score_sha256=?", (canonical_hash,)).fetchone()
                 if previous is None:
@@ -268,7 +293,13 @@ def _project_partition(source_db: Path, compact_db: Path, index: sqlite3.Connect
                 # complete partition lossy, so fail closed rather than skip it.
                 raise PackageVerificationError(f"{shard_id}: invalid accepted Brick-3 receipt for {stream_id}: {exc}") from exc
         compact.commit()
-        return {"accepted_streams": accepted, "unique_canonical_streams": unique, "canonical_duplicates": duplicates, "malformed": malformed}
+        summary={"accepted_streams": accepted, "unique_canonical_streams": unique, "canonical_duplicates": duplicates, "malformed": malformed,
+                 "receipt_explicit_rejects": explicit_rejects, "legacy_rejects_without_receipt": legacy_rejects,
+                 "reclassified_rejects": reclassified_rejects}
+        reconciliation={"state": "COMPLETE", "policy_id": RECONCILIATION_POLICY_ID, "shard_id": shard_id,
+                        "summary": summary, "reclassified_reject_stream_ids_sha256": sha("\n".join(reclassified_ids)),
+                        "reclassified_reject_stream_count": len(reclassified_ids), "used_raw_midi": False, "used_brick3": False}
+        return summary, reconciliation
     finally:
         compact.close()
         source.close()
@@ -342,14 +373,19 @@ def stream_consolidate(*, workspace: Path, source_uri: str, output_uri: str, run
                 _copy_from(_uri_child(_source_prefix(source_uri, run_id, dataset_id, shard_index, shard_count), "shard.sqlite"), source_db)
                 _verify_sqlite(source_db, ids, shard_index)
                 source_hash = _file_sha256(source_db)
-                summary = _project_partition(source_db, compact_db, index, dataset_id, shard_id)
+                summary, reconciliation = _project_partition(source_db, compact_db, index, dataset_id, shard_id)
                 compact_hash = _file_sha256(compact_db)
+                reconciliation.update({"source_completion_sha256": completion_hash, "source_shard_db_sha256": source_hash})
+                reconciliation_path = stage / "receipt-reconciliation.json"
+                writej(reconciliation_path, reconciliation)
                 manifest = {
                     "state": "COMPLETE", "policy_id": POLICY_ID, "consolidation_id": consolidation_id,
                     "dataset_id": dataset_id, "run_id": run_id, "shard_index": shard_index, "shard_count": shard_count,
                     "source_completion_sha256": completion_hash, "source_shard_db_sha256": source_hash,
                     "source_worker_finished_at": worker_receipt.get("finished_at"), "canonical_sqlite_sha256": compact_hash,
-                    "source_item_count": len(ids), "summary": summary, "used_raw_midi": False, "used_brick3": False,
+                    "source_item_count": len(ids), "summary": summary,
+                    "receipt_reconciliation_policy_id": RECONCILIATION_POLICY_ID,
+                    "receipt_reconciliation_sha256": sha(reconciliation_path.read_bytes()), "used_raw_midi": False, "used_brick3": False,
                     "created_at": time.time(),
                 }
                 manifest_path = stage / "manifest.json"
@@ -358,6 +394,7 @@ def stream_consolidate(*, workspace: Path, source_uri: str, output_uri: str, run
                 index.commit()
                 prefix = _output_prefix(output_uri, consolidation_id, dataset_id, shard_index, shard_count)
                 _upload_and_verify(compact_db, output_uri, "consolidations", consolidation_id, dataset_id, f"shard-{shard_index:05d}-of-{shard_count:05d}", "canonical.sqlite", expected_sha256=compact_hash)
+                _upload_and_verify(reconciliation_path, output_uri, "consolidations", consolidation_id, dataset_id, f"shard-{shard_index:05d}-of-{shard_count:05d}", "receipt-reconciliation.json", expected_sha256=sha(reconciliation_path.read_bytes()))
                 _upload_and_verify(manifest_path, output_uri, "consolidations", consolidation_id, dataset_id, f"shard-{shard_index:05d}-of-{shard_count:05d}", "manifest.json", expected_sha256=sha(manifest_path.read_bytes()))
                 _upload_and_verify(index_path, output_uri, "consolidations", consolidation_id, "canonical-index.sqlite", expected_sha256=_file_sha256(index_path))
                 completion_path = stage / "completion.json"
