@@ -399,3 +399,11 @@ SQLite data, emits a hash-bound reconciliation receipt per compact partition,
 excludes cached false accepts whose upstream decision was `REJECT`, and fails
 closed for malformed purported accepts. Neither raw MIDI nor Brick 3 is
 reopened, and immutable distributed source packages remain unchanged.
+
+## 2026-09-19 — GigaMIDI reconciliation execution queue
+
+The `ML-GIGA-RECEIPT-RECONCILE` work package records the receipt-only
+reconciliation and streaming-finalization acceptance checks. It keeps the
+historical packages immutable, requires a verified durable compact partition
+before progress is claimed, and treats the remaining shard projection as
+resumable local work rather than an excuse to replay source MIDI.

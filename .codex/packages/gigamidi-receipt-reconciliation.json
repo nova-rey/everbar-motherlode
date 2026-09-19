@@ -1,0 +1,18 @@
+{
+  "id": "ML-GIGA-RECEIPT-RECONCILE",
+  "title": "Reconcile historical Brick 3 receipt decisions and resume canonical projection",
+  "requirement_ids": ["no-raw-replay", "receipt-fail-closed", "resume-streaming-consolidation"],
+  "priority": 1,
+  "dependencies": [],
+  "workstream": "motherlode-gigamidi-finalization",
+  "domain": "corpus-receipts",
+  "scope": "Correct acceptance classification from immutable Brick 3 receipt decision status; reconcile existing GigaMIDI shard SQLite metadata receipt-only; restart streaming canonical consolidation.",
+  "edit_boundaries": ["src/everbar_motherlode/core.py", "src/everbar_motherlode/streaming_consolidation.py", "tests/test_core.py", "tests/test_streaming_consolidation.py", "scripts/", "docs/", "bible.md"],
+  "resource_requirements": [
+    {"name": "canonical-integration", "units": 1, "exclusive": true},
+    {"name": "model-agent", "units": 1, "exclusive": false}
+  ],
+  "base_sha": "a0dbe7d",
+  "validation_requirements": ["reject-json-with-zero-exit-regression", "receipt-only-reconciliation", "focused-tests", "remote-preflight", "streaming-resume"],
+  "completion_criterion": "All contradictory GigaMIDI receipt rows are reconciled without raw MIDI or Brick 3 replay; tests pass; canonical streaming consolidation is restarted and has durable verified progress."
+}

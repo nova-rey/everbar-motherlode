@@ -1,0 +1,92 @@
+{
+  "campaign": "gigamidi-receipt-reconciliation",
+  "created_at": "2026-09-19T22:56:10.602152Z",
+  "dependencies": {},
+  "hard_problem_repo": null,
+  "packages": [
+    {
+      "attempt_state": {
+        "material_attempts": [],
+        "tier": 1
+      },
+      "base_sha": "a0dbe7d",
+      "campaign": "gigamidi-receipt-reconciliation",
+      "candidate": {
+        "artifact": null,
+        "base_sha": "a0dbe7d",
+        "returned_at": "2026-09-19T23:11:25.920478Z",
+        "returned_by": "supervisor",
+        "sha": "c95993493ee6bb4f2262552f7f82b25f1df9094d"
+      },
+      "completion_criterion": "All contradictory GigaMIDI receipt rows are reconciled without raw MIDI or Brick 3 replay; tests pass; canonical streaming consolidation is restarted and has durable verified progress.",
+      "created_at": "2026-09-19T22:56:46.758215Z",
+      "dependencies": [],
+      "domain": "corpus-receipts",
+      "edit_boundaries": [
+        "src/everbar_motherlode/core.py",
+        "src/everbar_motherlode/streaming_consolidation.py",
+        "tests/test_core.py",
+        "tests/test_streaming_consolidation.py",
+        "scripts/",
+        "docs/",
+        "bible.md"
+      ],
+      "evidence_refs": [],
+      "id": "ML-GIGA-RECEIPT-RECONCILE",
+      "notes": "",
+      "owner": "root",
+      "priority": 1,
+      "project": "nova-rey/everbar-motherlode",
+      "required": true,
+      "requirement_ids": [
+        "no-raw-replay",
+        "receipt-fail-closed",
+        "resume-streaming-consolidation"
+      ],
+      "resource_requirements": [
+        {
+          "exclusive": true,
+          "name": "canonical-integration",
+          "units": 1
+        },
+        {
+          "exclusive": false,
+          "name": "model-agent",
+          "units": 1
+        }
+      ],
+      "scope": "Correct acceptance classification from immutable Brick 3 receipt decision status; reconcile existing GigaMIDI shard SQLite metadata receipt-only; restart streaming canonical consolidation.",
+      "session_ids": [
+        "root-validate-20260919"
+      ],
+      "status": "VALIDATING",
+      "title": "Reconcile historical Brick 3 receipt decisions and resume canonical projection",
+      "updated_at": "2026-09-19T23:11:25.964934Z",
+      "validation": {
+        "required": [
+          "reject-json-with-zero-exit-regression",
+          "receipt-only-reconciliation",
+          "focused-tests",
+          "remote-preflight",
+          "streaming-resume"
+        ],
+        "results": {}
+      },
+      "waiting_on": [],
+      "workstream": "motherlode-gigamidi-finalization"
+    }
+  ],
+  "project": "nova-rey/everbar-motherlode",
+  "resources": {
+    "canonical-integration": {
+      "capacity": 1,
+      "exclusive": true
+    },
+    "model-agent": {
+      "capacity": 4,
+      "exclusive": false
+    }
+  },
+  "schema_version": 1,
+  "updated_at": "2026-09-19T23:11:25.965040Z"
+}
