@@ -43,5 +43,17 @@ RCLONE_CONFIG=/home/rey/.config/rclone/rclone.conf \
   --plan /home/rey/everbar-motherlode/configs/remaining-sources-autopilot.json
 ```
 
+For unattended operation, launch the retry wrapper rather than invoking the
+Python controller directly. It resumes exclusively from durable receipts and
+uses bounded exponential backoff for an ordinary download, process, or object
+store outage; `COMPLETE` is the only exit condition.
+
+```bash
+RCLONE_CONFIG=/home/rey/.config/rclone/rclone.conf \
+EVERBAR_CHECKOUT=/home/rey/dreamstream-everbar \
+nohup /home/rey/everbar-motherlode/scripts/run-remaining-sources-autopilot.sh \
+  >/home/rey/motherlode-launch/remaining-sources-autopilot.log 2>&1 &
+```
+
 R2 completion markers and compact canonical receipts are the durability
 boundary; a local source tree is never deleted before both paths complete.

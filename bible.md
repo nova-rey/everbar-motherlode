@@ -419,3 +419,8 @@ published and verified in R2, receipt-reconciled into streaming compact
 canonical partitions, then has only its verified reproducible local source
 payload released before advancing to the next source. This orchestration does
 not alter Brick 3, corpus policy, or completed source data.
+
+The detached retry wrapper resumes this exact controller only from durable
+receipts after ordinary failures and applies bounded exponential backoff; it
+exits only on the controller's explicit `COMPLETE` terminal receipt. This
+removes transient remote outages as a reason for a human to restart the queue.
