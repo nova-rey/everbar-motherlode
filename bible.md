@@ -407,3 +407,15 @@ reconciliation and streaming-finalization acceptance checks. It keeps the
 historical packages immutable, requires a verified durable compact partition
 before progress is claimed, and treats the remaining shard projection as
 resumable local work rather than an excuse to replay source MIDI.
+
+## 2026-09-20 — Remaining-source durable autopilot
+
+Added a local-only, versioned controller for the remaining automated,
+training-allowed raw sources. It creates an explicit full registry inventory,
+records every manual/restricted/overlay/superseded entry as a durable gate,
+and skips the completed PDMX/POP909/ASAP/MAESTRO/GigaMIDI lanes. Each eligible
+source is downloaded, extracted, processed by deterministic partitions,
+published and verified in R2, receipt-reconciled into streaming compact
+canonical partitions, then has only its verified reproducible local source
+payload released before advancing to the next source. This orchestration does
+not alter Brick 3, corpus policy, or completed source data.

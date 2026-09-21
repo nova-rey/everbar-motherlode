@@ -1,0 +1,10 @@
+{
+  "policy_id": "motherlode-remaining-sources-autopilot-v1",
+  "description": "Local-only, R2-durable processing of remaining automated training-allowed raw sources.",
+  "run_id_prefix": "local-autopilot-20260920",
+  "output_uri": "direct-s3://evacuate/everbar-motherlode-output",
+  "max_partition_workers": 12,
+  "reserve_bytes": 21474836480,
+  "storage_envelope_multiplier": 3.0,
+  "completed_source_ids": ["pdmx", "pop909", "asap", "maestro", "gigamidi"]
+}
