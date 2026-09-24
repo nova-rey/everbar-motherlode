@@ -47,7 +47,10 @@ def _mac_write_command(remote_path: str) -> str:
     return (
         f"set -euo pipefail; mkdir -p {parent}; tmp={target}.partial; cat > \"$tmp\"; mv \"$tmp\" {target}; "
         f"digest=$(shasum -a 256 {target} | awk '{{print $1}}'); evicted=0; "
-        f"for delay in 2 4 8 16 30 30 30 30 30 30; do if brctl evict {target}; then evicted=1; break; fi; sleep \"$delay\"; done; "
+        # brctl emits a human success sentence on stdout.  Keep stdout as a
+        # strict machine protocol (digest<TAB>flags) by moving that sentence
+        # to stderr; failed attempts remain diagnostic stderr as well.
+        f"for delay in 2 4 8 16 30 30 30 30 30 30; do if brctl evict {target} 1>&2; then evicted=1; break; fi; sleep \"$delay\"; done; "
         f"test \"$evicted\" = 1; flags=$(ls -lO {target}); printf '%s\\t%s\\n' \"$digest\" \"$flags\""
     )
 

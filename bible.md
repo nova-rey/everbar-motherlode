@@ -26,6 +26,11 @@ documented short delay between a large-file write and `brctl evict` acceptance
 without retransmitting source bytes or treating a merely local Mac file as a
 durable iCloud copy.
 
+The Mac-side receipt protocol reserves stdout exclusively for the structured
+`SHA-256<TAB>flags` response.  CloudDocs' human-readable `brctl evict` success
+line is redirected to diagnostic stderr, preventing a successful eviction from
+being misparsed as a failed integrity receipt.
+
 ## 2026-09-12 — R2 streaming canonical consolidation
 
 Added `stream-consolidate`, an explicit alternative to the historical
