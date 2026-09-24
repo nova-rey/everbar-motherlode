@@ -66,6 +66,18 @@ def test_gzip_inventory_resumes_from_complete_page_members(tmp_path: Path, monke
     assert [row["key"] for row in migration.iter_inventory(target)] == ["a", "b"]
 
 
+def test_gzip_inventory_discards_only_a_corrupt_final_member(tmp_path: Path):
+    partial = tmp_path / "inventory.jsonl.gz.partial"
+    first = {"schema": migration.MIGRATION_SCHEMA, "bucket": "b", "key": "a", "object_id": migration.object_id("b", "a"), "size": 2, "etag": "a", "last_modified": None}
+    with partial.open("ab") as raw:
+        with gzip.GzipFile(fileobj=raw, mode="wb") as member:
+            member.write(json.dumps(first, sort_keys=True).encode() + b"\n")
+        raw.write(b"not-a-complete-gzip-member")
+    _, counts, cursors = migration._read_partial_inventory(partial)
+    assert counts == {"b": {"objects": 1, "bytes": 2}}
+    assert cursors == {"b": "a"}
+
+
 def test_stream_reports_chunk_and_total_hashes_without_mutating_payload(monkeypatch, capsys):
     payload = b"abcde" * 700_000
     class Body:

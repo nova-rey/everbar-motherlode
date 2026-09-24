@@ -485,3 +485,8 @@ for both the R2 source host and the iCloud Mac.  Host-key rotation is handled
 by updating only the controlled migration files, not by weakening global SSH
 verification.  This keeps an ephemeral host replacement from silently
 redirecting corpus bytes or credentials.
+
+The gzip inventory recovery test now also proves that a malformed final member
+does not discard the valid page-members before it.  This is important because
+an interrupted listing is a resumable checkpoint, never a reason to restart a
+multi-million-object inventory from zero.
