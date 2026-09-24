@@ -137,30 +137,34 @@ def migrate_one(record: dict, args: argparse.Namespace) -> dict:
         existing = json.loads(final_receipt.read_text())
         if existing.get("state") == "COMPLETE" and existing.get("inventory") == record:
             return {"state": "SKIPPED_COMPLETE", "object_id": oid}
-    source_command = (
-        f"cd {shlex.quote(args.remote_repo)} && RCLONE_CONFIG={shlex.quote(args.remote_rclone_config)} "
-        f"{shlex.quote(args.remote_python)} -m everbar_motherlode.cli r2-icloud-source-stream "
-        f"--bucket {shlex.quote(record['bucket'])} --key {shlex.quote(record['key'])} --chunk-bytes {args.chunk_bytes}"
-    )
-    producer = _ssh(args.source_host, source_command, stdin=None, capture=True)
-    events: list[dict] = []; errors: list[str] = []
-    reader = threading.Thread(target=_read_events, args=(producer.stderr, events, errors), daemon=True); reader.start()
     chunk_count = (record["size"] + args.chunk_bytes - 1) // args.chunk_bytes
     receipts = []
     destination_object = f"{args.icloud_destination.rstrip('/')}/objects/{oid}"
-    for index in range(chunk_count):
+    # Resume starts at the first missing receipt.  Existing chunks are not
+    # reread or retransmitted; their recorded source/Mac hash comparison is
+    # retained.  A separate range-hashed full-object receipt closes the whole
+    # object hash after all chunks are present.
+    first_missing = 0
+    while first_missing < chunk_count:
+        prior = _existing_chunk_receipt(_receipt_path(args.work_root, oid, first_missing))
+        if prior is None:
+            break
+        receipts.append(prior); first_missing += 1
+    producer = None; events: list[dict] = []; errors: list[str] = []; reader = None
+    if first_missing < chunk_count:
+        start_offset = first_missing * args.chunk_bytes
+        source_command = (
+            f"cd {shlex.quote(args.remote_repo)} && RCLONE_CONFIG={shlex.quote(args.remote_rclone_config)} "
+            f"{shlex.quote(args.remote_python)} -m everbar_motherlode.cli r2-icloud-source-stream "
+            f"--bucket {shlex.quote(record['bucket'])} --key {shlex.quote(record['key'])} --chunk-bytes {args.chunk_bytes} "
+            f"--start-offset {start_offset}"
+        )
+        producer = _ssh(args.source_host, source_command, stdin=None, capture=True)
+        reader = threading.Thread(target=_read_events, args=(producer.stderr, events, errors), daemon=True); reader.start()
+    new_receipts = []
+    for index in range(first_missing, chunk_count):
         size = min(args.chunk_bytes, record["size"] - index * args.chunk_bytes)
         local_receipt = _receipt_path(args.work_root, oid, index)
-        previous = _existing_chunk_receipt(local_receipt)
-        if previous is not None:
-            # Still consume source bytes so its final whole-object digest covers
-            # exactly the inventory object without retaining a local payload.
-            remaining = size
-            while remaining:
-                block = producer.stdout.read(min(8 * 1024 * 1024, remaining))
-                if not block: raise RuntimeError("source stream ended while skipping verified chunk")
-                remaining -= len(block)
-            receipts.append(previous); continue
         free = _mac_free_bytes(args.mac_host, args.mac_known_hosts, args.icloud_destination)
         if free < args.mac_min_free_bytes + size:
             raise RuntimeError(
@@ -175,20 +179,34 @@ def migrate_one(record: dict, args: argparse.Namespace) -> dict:
         local_receipt.parent.mkdir(parents=True, exist_ok=True); local_receipt.write_text(_json(receipt))
         remote_receipt = f"{destination_object}/receipts/chunk-{index:08d}.json"
         _remote_write_and_evict(args.mac_host, args.mac_known_hosts, args.icloud_destination, local_receipt, remote_receipt)
-        receipts.append(receipt)
-    producer.stdout.close(); rc = producer.wait(); reader.join(timeout=10)
-    if rc or errors:
-        raise RuntimeError(f"source stream failed rc={rc}: {'; '.join(errors[-3:])}")
+        receipts.append(receipt); new_receipts.append(receipt)
+    terminal = None
+    if producer is not None:
+        producer.stdout.close(); rc = producer.wait(); reader.join(timeout=10)
+        if rc or errors:
+            raise RuntimeError(f"source stream failed rc={rc}: {'; '.join(errors[-3:])}")
+        terminal = next((event for event in events if event.get("event") == "OBJECT"), None)
+        if terminal is None or terminal["object_size"] != record["size"] or terminal.get("etag") != record["etag"]:
+            raise RuntimeError("source terminal receipt does not match inventory")
     chunk_events = sorted((event for event in events if event.get("event") == "CHUNK"), key=lambda x: x["index"])
-    terminal = next((event for event in events if event.get("event") == "OBJECT"), None)
-    if terminal is None or terminal["size"] != record["size"] or terminal.get("etag") != record["etag"]:
-        raise RuntimeError("source terminal receipt does not match inventory")
-    if len(chunk_events) != chunk_count or len(receipts) != chunk_count:
+    if len(chunk_events) != len(new_receipts) or len(receipts) != chunk_count:
         raise RuntimeError("source chunk receipt count does not match inventory")
-    for event, receipt in zip(chunk_events, receipts):
+    for event, receipt in zip(chunk_events, new_receipts):
         if event["index"] != receipt["chunk_index"] or event["size"] != receipt["size"] or event["sha256"] != receipt["sha256"]:
             raise RuntimeError("source and Mac chunk hashes differ; object retained in R2")
-    manifest = {"schema": MIGRATION_SCHEMA, "state": "COMPLETE", "inventory": record, "source": terminal,
+    hash_command = (
+        f"cd {shlex.quote(args.remote_repo)} && RCLONE_CONFIG={shlex.quote(args.remote_rclone_config)} "
+        f"{shlex.quote(args.remote_python)} -m everbar_motherlode.cli r2-icloud-object-hash "
+        f"--bucket {shlex.quote(record['bucket'])} --key {shlex.quote(record['key'])}"
+    )
+    hashed = _ssh(args.source_host, hash_command, capture=True); stdout, stderr = hashed.communicate()
+    if hashed.returncode:
+        raise RuntimeError(f"source object hash failed: {stderr.decode(errors='replace')[-500:]}")
+    source_hash = json.loads(stdout)
+    if source_hash["size"] != record["size"] or source_hash["etag"] != record["etag"]:
+        raise RuntimeError("source whole-object hash metadata does not match inventory")
+    manifest = {"schema": MIGRATION_SCHEMA, "state": "COMPLETE", "inventory": record,
+                "source_stream": terminal, "source_object_hash": source_hash,
                 "chunks": receipts, "manifest_sha256": None, "completed_at": time.time()}
     manifest["manifest_sha256"] = hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     final_receipt.write_text(_json(manifest))

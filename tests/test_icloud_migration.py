@@ -54,15 +54,34 @@ def test_stream_reports_chunk_and_total_hashes_without_mutating_payload(monkeypa
         def read(self, count):
             result = payload[self.pos:self.pos + count]; self.pos += len(result); return result
     class Client:
-        def get_object(self, **kwargs): return {"Body": Body(), "ContentLength": len(payload), "ETag": '"source-etag"'}
+        def head_object(self, **kwargs): return {"ContentLength": len(payload), "ETag": '"source-etag"'}
+        def get_object(self, **kwargs): return {"Body": Body()}
     monkeypatch.setattr(migration, "_direct_s3_client", lambda _: Client())
     sink = io.BytesIO()
     terminal = migration.stream_r2_object("bucket", "key", 1024 * 1024, sink)
     assert sink.getvalue() == payload
-    assert terminal["sha256"] == hashlib.sha256(payload).hexdigest()
+    assert terminal["stream_sha256"] == hashlib.sha256(payload).hexdigest()
     events = [json.loads(line[len(migration.STREAM_EVENT_PREFIX):]) for line in capsys.readouterr().err.splitlines()]
     assert [event["event"] for event in events] == ["CHUNK", "CHUNK", "CHUNK", "CHUNK", "OBJECT"]
     assert sum(event["size"] for event in events if event["event"] == "CHUNK") == len(payload)
+
+
+def test_stream_can_resume_at_a_chunk_boundary(monkeypatch, capsys):
+    payload = b"abcde" * 700_000
+    class Body:
+        def __init__(self, body): self.body = body; self.pos = 0
+        def read(self, count):
+            result = self.body[self.pos:self.pos + count]; self.pos += len(result); return result
+    class Client:
+        def head_object(self, **kwargs): return {"ContentLength": len(payload), "ETag": '"source-etag"'}
+        def get_object(self, **kwargs):
+            start = int(kwargs["Range"].split("=")[1].split("-")[0]) if "Range" in kwargs else 0
+            return {"Body": Body(payload[start:])}
+    monkeypatch.setattr(migration, "_direct_s3_client", lambda _: Client())
+    sink = io.BytesIO(); size = 1024 * 1024
+    terminal = migration.stream_r2_object("bucket", "key", size, sink, start_offset=size)
+    assert sink.getvalue() == payload[size:]
+    assert terminal["start_offset"] == size and terminal["object_size"] == len(payload)
 
 
 def test_delete_refuses_source_metadata_change(monkeypatch):

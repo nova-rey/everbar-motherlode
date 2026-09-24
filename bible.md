@@ -458,3 +458,13 @@ The detached retry wrapper resumes this exact controller only from durable
 receipts after ordinary failures and applies bounded exponential backoff; it
 exits only on the controller's explicit `COMPLETE` terminal receipt. This
 removes transient remote outages as a reason for a human to restart the queue.
+
+## 2026-09-24 — Resumable iCloud evacuation range relay
+
+The R2-to-iCloud evacuation relay now resumes only from completed, hash-matched
+and iCloud-evicted chunk receipts.  It requests the first missing object range
+instead of rereading previously proven chunks, and independently range-hashes
+the source object before creating its complete object manifest.  A physical
+free-space watermark on the Mac pauses safely before a chunk could exhaust the
+local iCloud volume.  This is a preservation-only migration path: R2 deletion
+remains explicit and has not been enabled for the evacuation.

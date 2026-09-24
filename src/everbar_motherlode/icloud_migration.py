@@ -131,7 +131,42 @@ def iter_inventory(path: Path) -> Iterable[dict]:
             yield record
 
 
-def stream_r2_object(bucket: str, key: str, chunk_bytes: int, output: BinaryIO | None = None) -> dict:
+def _read_exact(body: object, expected: int) -> bytes:
+    pieces: list[bytes] = []; remaining = expected
+    while remaining:
+        block = body.read(min(8 * 1024 * 1024, remaining))
+        if not block:
+            break
+        pieces.append(block); remaining -= len(block)
+    data = b"".join(pieces)
+    if len(data) != expected:
+        raise RuntimeError(f"R2 response truncated: expected {expected}, received {len(data)}")
+    return data
+
+
+def hash_r2_object(bucket: str, key: str, *, range_bytes: int = 64 * 1024 * 1024, retries: int = 3) -> dict:
+    """Hash an immutable object through bounded, retryable S3 ranges only."""
+    if range_bytes < 1024 * 1024 or retries < 1:
+        raise ValueError("invalid hash range or retry count")
+    client = _direct_s3_client("direct-s3://evacuate/hash")
+    head = client.head_object(Bucket=bucket, Key=key)
+    total = int(head["ContentLength"]); digest = hashlib.sha256()
+    for start in range(0, total, range_bytes):
+        end = min(total, start + range_bytes) - 1
+        last_error: Exception | None = None
+        for _ in range(retries):
+            try:
+                data = _read_exact(client.get_object(Bucket=bucket, Key=key, Range=f"bytes={start}-{end}")["Body"], end - start + 1)
+                digest.update(data); break
+            except Exception as exc:  # a fresh range request is the retry boundary
+                last_error = exc
+        else:
+            raise RuntimeError(f"R2 hash range {start}-{end} failed after {retries} attempts") from last_error
+    return {"event": "OBJECT_HASH", "bucket": bucket, "key": key, "object_id": object_id(bucket, key),
+            "size": total, "sha256": digest.hexdigest(), "etag": str(head.get("ETag", "")).strip('"')}
+
+
+def stream_r2_object(bucket: str, key: str, chunk_bytes: int, output: BinaryIO | None = None, *, start_offset: int = 0) -> dict:
     """Stream an R2 object once, reporting chunk and full-object hashes on stderr.
 
     The raw byte channel is stdout only.  This makes the producer safe to use
@@ -142,13 +177,17 @@ def stream_r2_object(bucket: str, key: str, chunk_bytes: int, output: BinaryIO |
     if chunk_bytes < 1024 * 1024:
         raise ValueError("chunk_bytes must be at least 1 MiB")
     client = _direct_s3_client("direct-s3://evacuate/stream")
-    response = client.get_object(Bucket=bucket, Key=key)
-    declared_size = int(response.get("ContentLength", -1))
+    head = client.head_object(Bucket=bucket, Key=key)
+    declared_size = int(head["ContentLength"])
+    if start_offset < 0 or start_offset > declared_size or start_offset % chunk_bytes:
+        raise ValueError("start_offset must be a chunk-aligned position within the object")
+    response = client.get_object(Bucket=bucket, Key=key, **({"Range": f"bytes={start_offset}-"} if start_offset else {}))
+    expected_streamed = declared_size - start_offset
     body = response["Body"]
     sink = output or sys.stdout.buffer
     complete = hashlib.sha256()
     chunk = hashlib.sha256()
-    index = offset = chunk_size = 0
+    index = start_offset // chunk_bytes; offset = start_offset; chunk_size = 0
     while True:
         block = body.read(min(8 * 1024 * 1024, chunk_bytes - chunk_size))
         if not block:
@@ -166,11 +205,12 @@ def stream_r2_object(bucket: str, key: str, chunk_bytes: int, output: BinaryIO |
                  "size": chunk_size, "sha256": chunk.hexdigest()}
         print(STREAM_EVENT_PREFIX + json.dumps(event, sort_keys=True), file=sys.stderr, flush=True)
         index += 1
-    if offset != declared_size:
-        raise RuntimeError(f"source object changed or was truncated: declared {declared_size}, read {offset}")
+    if offset - start_offset != expected_streamed:
+        raise RuntimeError(f"source object changed or was truncated: declared {declared_size}, read through {offset}")
     terminal = {"event": "OBJECT", "bucket": bucket, "key": key, "object_id": object_id(bucket, key),
-                "size": offset, "sha256": complete.hexdigest(), "chunk_count": index,
-                "etag": str(response.get("ETag", "")).strip('"')}
+                "object_size": declared_size, "start_offset": start_offset, "streamed_size": offset - start_offset,
+                "stream_sha256": complete.hexdigest(), "chunk_count": index,
+                "etag": str(head.get("ETag", "")).strip('"')}
     print(STREAM_EVENT_PREFIX + json.dumps(terminal, sort_keys=True), file=sys.stderr, flush=True)
     return terminal
 

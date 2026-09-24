@@ -30,6 +30,9 @@ def main(argv=None):
  p_r2_stream.add_argument("--bucket", required=True)
  p_r2_stream.add_argument("--key", required=True)
  p_r2_stream.add_argument("--chunk-bytes", type=int, required=True)
+ p_r2_stream.add_argument("--start-offset", type=int, default=0)
+ p_r2_hash=sub.add_parser("r2-icloud-object-hash")
+ p_r2_hash.add_argument("--bucket", required=True); p_r2_hash.add_argument("--key", required=True)
  p_r2_delete=sub.add_parser("r2-icloud-delete-verified")
  p_r2_delete.add_argument("--bucket", required=True)
  p_r2_delete.add_argument("--key", required=True)
@@ -64,7 +67,10 @@ def main(argv=None):
   print(__import__('json').dumps(inventory_r2(a.output, a.bucket, resume=a.resume), indent=2, sort_keys=True)); return 0
  if a.cmd=="r2-icloud-source-stream":
   from .icloud_migration import stream_r2_object
-  stream_r2_object(a.bucket, a.key, a.chunk_bytes); return 0
+  stream_r2_object(a.bucket, a.key, a.chunk_bytes, start_offset=a.start_offset); return 0
+ if a.cmd=="r2-icloud-object-hash":
+  from .icloud_migration import hash_r2_object
+  print(__import__('json').dumps(hash_r2_object(a.bucket, a.key), sort_keys=True)); return 0
  if a.cmd=="r2-icloud-delete-verified":
   from .icloud_migration import delete_verified_r2_object
   print(__import__('json').dumps(delete_verified_r2_object(a.bucket, a.key, a.expected_size, a.expected_etag), sort_keys=True)); return 0
