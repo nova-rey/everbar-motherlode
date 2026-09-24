@@ -477,3 +477,11 @@ little free disk can resume through S3 `StartAfter` without replaying prior
 pages or holding an unbounded plaintext inventory.  The checkpoint itself is
 separately copied and evicted to iCloud before its temporary source copy is
 released; it does not authorize any R2 deletion.
+
+## 2026-09-24 — Controlled ephemeral SSH identity for migration relays
+
+The migration coordinator requires separate campaign-local known-host files
+for both the R2 source host and the iCloud Mac.  Host-key rotation is handled
+by updating only the controlled migration files, not by weakening global SSH
+verification.  This keeps an ephemeral host replacement from silently
+redirecting corpus bytes or credentials.

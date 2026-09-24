@@ -159,7 +159,7 @@ def migrate_one(record: dict, args: argparse.Namespace) -> dict:
             f"--bucket {shlex.quote(record['bucket'])} --key {shlex.quote(record['key'])} --chunk-bytes {args.chunk_bytes} "
             f"--start-offset {start_offset}"
         )
-        producer = _ssh(args.source_host, source_command, stdin=None, capture=True)
+        producer = _ssh(args.source_host, source_command, known_hosts=args.source_known_hosts, stdin=None, capture=True)
         reader = threading.Thread(target=_read_events, args=(producer.stderr, events, errors), daemon=True); reader.start()
     new_receipts = []
     for index in range(first_missing, chunk_count):
@@ -199,7 +199,7 @@ def migrate_one(record: dict, args: argparse.Namespace) -> dict:
         f"{shlex.quote(args.remote_python)} -m everbar_motherlode.cli r2-icloud-object-hash "
         f"--bucket {shlex.quote(record['bucket'])} --key {shlex.quote(record['key'])}"
     )
-    hashed = _ssh(args.source_host, hash_command, capture=True); stdout, stderr = hashed.communicate()
+    hashed = _ssh(args.source_host, hash_command, known_hosts=args.source_known_hosts, capture=True); stdout, stderr = hashed.communicate()
     if hashed.returncode:
         raise RuntimeError(f"source object hash failed: {stderr.decode(errors='replace')[-500:]}")
     source_hash = json.loads(stdout)
@@ -219,7 +219,7 @@ def migrate_one(record: dict, args: argparse.Namespace) -> dict:
             f"--bucket {shlex.quote(record['bucket'])} --key {shlex.quote(record['key'])} "
             f"--expected-size {record['size']} --expected-etag {shlex.quote(record['etag'])}"
         )
-        deleted = _ssh(args.source_host, delete_command, capture=True); stdout, stderr = deleted.communicate()
+        deleted = _ssh(args.source_host, delete_command, known_hosts=args.source_known_hosts, capture=True); stdout, stderr = deleted.communicate()
         if deleted.returncode: raise RuntimeError(f"source deletion refused: {stderr.decode(errors='replace')[-500:]}")
         # The object manifest remains immutable after its iCloud proof.  A
         # separate deletion receipt prevents a post-verification mutation from
@@ -235,7 +235,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--inventory", type=Path, required=True)
     parser.add_argument("--work-root", type=Path, required=True)
-    parser.add_argument("--source-host", required=True); parser.add_argument("--remote-repo", required=True)
+    parser.add_argument("--source-host", required=True); parser.add_argument("--source-known-hosts", type=Path, required=True)
+    parser.add_argument("--remote-repo", required=True)
     parser.add_argument("--remote-python", required=True); parser.add_argument("--remote-rclone-config", required=True)
     parser.add_argument("--mac-host", required=True); parser.add_argument("--mac-known-hosts", type=Path, required=True)
     parser.add_argument("--icloud-destination", required=True); parser.add_argument("--chunk-mib", type=int, default=512)
