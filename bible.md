@@ -468,3 +468,12 @@ the source object before creating its complete object manifest.  A physical
 free-space watermark on the Mac pauses safely before a chunk could exhaust the
 local iCloud volume.  This is a preservation-only migration path: R2 deletion
 remains explicit and has not been enabled for the evacuation.
+
+## 2026-09-24 — Disk-bounded inventory checkpoints
+
+R2 inventories can be persisted as concatenated page-sized gzip members.  Each
+completed member is a crash-consistent JSONL prefix, so a source host with
+little free disk can resume through S3 `StartAfter` without replaying prior
+pages or holding an unbounded plaintext inventory.  The checkpoint itself is
+separately copied and evicted to iCloud before its temporary source copy is
+released; it does not authorize any R2 deletion.

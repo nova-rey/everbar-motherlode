@@ -8,6 +8,7 @@ iCloud Drive host without retaining corpus payloads locally.
 from __future__ import annotations
 
 import hashlib
+import gzip
 import json
 import sys
 import time
@@ -32,6 +33,11 @@ def _canonical(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
+def _is_gzip_inventory(path: Path) -> bool:
+    """Recognize a completed ``.gz`` inventory and its ``.gz.partial`` peer."""
+    return path.name.endswith(".gz") or path.name.endswith(".gz.partial")
+
+
 def _read_partial_inventory(path: Path) -> tuple[hashlib._Hash, dict[str, dict[str, int]], dict[str, str]]:
     """Recover a complete-line JSONL prefix after interruption.
 
@@ -42,6 +48,34 @@ def _read_partial_inventory(path: Path) -> tuple[hashlib._Hash, dict[str, dict[s
     """
     digest = hashlib.sha256(); counts: dict[str, dict[str, int]] = {}; last: dict[str, str] = {}
     if not path.exists():
+        return digest, counts, last
+    if _is_gzip_inventory(path):
+        # Every pagination page is written as one complete gzip member.  A
+        # terminated final append can therefore leave only an unreadable tail;
+        # the prior members and their newline-delimited records remain a safe
+        # resume prefix.  Do not rewrite a multi-gigabyte checkpoint merely to
+        # discard that tail.
+        try:
+            handle = gzip.open(path, "rb")
+            lines = iter(handle.readline, b"")
+            for number, line in enumerate(lines, 1):
+                if not line.endswith(b"\n"):
+                    continue
+                record = json.loads(line)
+                if record.get("schema") != MIGRATION_SCHEMA:
+                    raise ValueError(f"partial inventory line {number} has unexpected schema")
+                bucket = record["bucket"]
+                row = counts.setdefault(bucket, {"objects": 0, "bytes": 0})
+                row["objects"] += 1; row["bytes"] += int(record["size"])
+                last[bucket] = record["key"]
+                digest.update(line)
+        except (EOFError, gzip.BadGzipFile):
+            # A killed final page is never authoritative; the complete prefix
+            # above is enough for S3 StartAfter resumption.
+            pass
+        finally:
+            try: handle.close()
+            except (UnboundLocalError, EOFError, gzip.BadGzipFile): pass
         return digest, counts, last
     data = path.read_bytes()
     newline = data.rfind(b"\n")
@@ -77,30 +111,36 @@ def inventory_r2(output: Path, buckets: Iterable[str] | None = None, *, resume: 
     if temporary.exists() and not resume:
         raise FileExistsError(f"partial inventory exists; rerun with resume: {temporary}")
     digest, counts, cursors = _read_partial_inventory(temporary) if resume else (hashlib.sha256(), {}, {})
-    with temporary.open("ab") as handle:
-        for bucket in selected:
-            count = counts.get(bucket, {}).get("objects", 0)
-            total = counts.get(bucket, {}).get("bytes", 0)
-            kwargs = {"Bucket": bucket}
-            if bucket in cursors:
-                kwargs["StartAfter"] = cursors[bucket]
-            for page in client.get_paginator("list_objects_v2").paginate(**kwargs):
-                for item in page.get("Contents", []):
-                    record = {
-                        "schema": MIGRATION_SCHEMA,
-                        "bucket": bucket,
-                        "key": item["Key"],
-                        "object_id": object_id(bucket, item["Key"]),
-                        "size": int(item["Size"]),
-                        "etag": str(item.get("ETag", "")).strip('"'),
-                        "last_modified": item.get("LastModified").isoformat() if item.get("LastModified") else None,
-                    }
-                    encoded = _canonical(record) + b"\n"
-                    handle.write(encoded); digest.update(encoded)
-                    count += 1; total += record["size"]
-                    cursors[bucket] = record["key"]
-                handle.flush()
-            counts[bucket] = {"objects": count, "bytes": total}
+    for bucket in selected:
+        count = counts.get(bucket, {}).get("objects", 0)
+        total = counts.get(bucket, {}).get("bytes", 0)
+        for page in client.get_paginator("list_objects_v2").paginate(**({"Bucket": bucket, **({"StartAfter": cursors[bucket]} if bucket in cursors else {})})):
+            page_bytes = bytearray()
+            for item in page.get("Contents", []):
+                record = {
+                    "schema": MIGRATION_SCHEMA,
+                    "bucket": bucket,
+                    "key": item["Key"],
+                    "object_id": object_id(bucket, item["Key"]),
+                    "size": int(item["Size"]),
+                    "etag": str(item.get("ETag", "")).strip('"'),
+                    "last_modified": item.get("LastModified").isoformat() if item.get("LastModified") else None,
+                }
+                encoded = _canonical(record) + b"\n"
+                page_bytes.extend(encoded); digest.update(encoded)
+                count += 1; total += record["size"]
+                cursors[bucket] = record["key"]
+            if page_bytes:
+                if _is_gzip_inventory(temporary):
+                    # A separate closed member per page gives a bounded
+                    # crash-consistent prefix without an extra staging file.
+                    with temporary.open("ab") as raw:
+                        with gzip.GzipFile(fileobj=raw, mode="wb") as compressed:
+                            compressed.write(page_bytes)
+                else:
+                    with temporary.open("ab") as handle:
+                        handle.write(page_bytes); handle.flush()
+        counts[bucket] = {"objects": count, "bytes": total}
     temporary.replace(output)
     summary = {
         "schema": MIGRATION_SCHEMA,
@@ -119,7 +159,8 @@ def inventory_r2(output: Path, buckets: Iterable[str] | None = None, *, resume: 
 
 def iter_inventory(path: Path) -> Iterable[dict]:
     """Read only schema-valid inventory records in deterministic file order."""
-    with path.open(encoding="utf-8") as handle:
+    opener = gzip.open if _is_gzip_inventory(path) else Path.open
+    with opener(path, "rt", encoding="utf-8") as handle:
         for number, line in enumerate(handle, 1):
             record = json.loads(line)
             if record.get("schema") != MIGRATION_SCHEMA:
