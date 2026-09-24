@@ -2,6 +2,18 @@
 
 Append-only engineering record.
 
+## 2026-09-24 — R2 to iCloud receipt-backed evacuation boundary
+
+Added a source-host-only R2 inventory and byte-stream protocol plus a
+coordinator that relays bounded object chunks directly to a user-controlled
+iCloud Drive Mac.  Every chunk receives independent source/Mac SHA-256
+comparison, an iCloud `brctl evict` receipt, and a dataless-file proof before
+the next chunk is attempted.  Whole-object manifests bind object key, provider
+metadata, full source hash, ordered chunk hashes, and deletion state.  Source
+deletion is opt-in and refuses changed source metadata; credentials remain only
+on the R2 source host.  Historical R2 data is never removed until its manifest
+and every chunk receipt are complete.
+
 ## 2026-09-12 — R2 streaming canonical consolidation
 
 Added `stream-consolidate`, an explicit alternative to the historical

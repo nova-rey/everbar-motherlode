@@ -22,6 +22,18 @@ def main(argv=None):
  p_autopilot.add_argument("--root", type=Path, required=True)
  p_autopilot.add_argument("--config", type=Path, required=True)
  p_autopilot.add_argument("--plan", type=Path, required=True)
+ p_r2_inventory=sub.add_parser("r2-icloud-inventory")
+ p_r2_inventory.add_argument("--output", type=Path, required=True)
+ p_r2_inventory.add_argument("--bucket", action="append")
+ p_r2_stream=sub.add_parser("r2-icloud-source-stream")
+ p_r2_stream.add_argument("--bucket", required=True)
+ p_r2_stream.add_argument("--key", required=True)
+ p_r2_stream.add_argument("--chunk-bytes", type=int, required=True)
+ p_r2_delete=sub.add_parser("r2-icloud-delete-verified")
+ p_r2_delete.add_argument("--bucket", required=True)
+ p_r2_delete.add_argument("--key", required=True)
+ p_r2_delete.add_argument("--expected-size", type=int, required=True)
+ p_r2_delete.add_argument("--expected-etag", required=True)
  p_snapshot=sub.add_parser("snapshot-preview"); p_snapshot.add_argument("--motherlode-root",type=Path,required=True); p_snapshot.add_argument("--output-root",type=Path,required=True); p_snapshot.add_argument("--everbar-checkout",type=Path,required=True); p_snapshot.add_argument("--motherlode-sha",required=True); p_snapshot.add_argument("--snapshot-name"); p_snapshot.add_argument("--snapshot-scope",default="EV1_PREVIEW_ONLY"); p_snapshot.add_argument("--everbar-sha")
  p_sidecar=sub.add_parser("build-v2-sidecar"); p_sidecar.add_argument("--base-snapshot",type=Path,required=True); p_sidecar.add_argument("--canonical-db",type=Path,required=True); p_sidecar.add_argument("--output-dir",type=Path,required=True)
  p_prefetch=sub.choices["prefetch"]; p_prefetch.add_argument("--workers",type=int,default=3)
@@ -46,6 +58,15 @@ def main(argv=None):
  if a.cmd=="remaining-sources-autopilot":
   from .autopilot import main as autopilot_main
   return autopilot_main(["--root", str(a.root), "--config", str(a.config), "--plan", str(a.plan)])
+ if a.cmd=="r2-icloud-inventory":
+  from .icloud_migration import inventory_r2
+  print(__import__('json').dumps(inventory_r2(a.output, a.bucket), indent=2, sort_keys=True)); return 0
+ if a.cmd=="r2-icloud-source-stream":
+  from .icloud_migration import stream_r2_object
+  stream_r2_object(a.bucket, a.key, a.chunk_bytes); return 0
+ if a.cmd=="r2-icloud-delete-verified":
+  from .icloud_migration import delete_verified_r2_object
+  print(__import__('json').dumps(delete_verified_r2_object(a.bucket, a.key, a.expected_size, a.expected_etag), sort_keys=True)); return 0
  cfg=config(a.config)
  if a.cmd=="preflight": print(__import__('json').dumps(preflight(a.root,cfg),indent=2)); return 0
  if a.cmd=="status": print(__import__('json').dumps(progress(a.root,cfg),indent=2)); return 0
