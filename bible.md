@@ -31,6 +31,11 @@ The Mac-side receipt protocol reserves stdout exclusively for the structured
 line is redirected to diagnostic stderr, preventing a successful eviction from
 being misparsed as a failed integrity receipt.
 
+The coordinator now checks the Mac's physical iCloud-volume free space before
+each new chunk and pauses before the write if that chunk would breach a 3 GiB
+safety floor.  Already verified chunks remain durable and resumable; the pause
+does not authorize R2 deletion.
+
 ## 2026-09-12 — R2 streaming canonical consolidation
 
 Added `stream-consolidate`, an explicit alternative to the historical

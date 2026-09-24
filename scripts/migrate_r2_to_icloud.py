@@ -104,6 +104,18 @@ def _read_events(stream, events: list[dict], errors: list[str]) -> None:
             errors.append(line[-500:])
 
 
+def _mac_free_bytes(host: str, known_hosts: Path, destination: str) -> int:
+    command = f"df -Pk {shlex.quote(destination)} | tail -1 | awk '{{print $4 * 1024}}'"
+    probe = _ssh(host, command, known_hosts=known_hosts, capture=True)
+    stdout, stderr = probe.communicate()
+    if probe.returncode:
+        raise RuntimeError(f"cannot inspect Mac free space: {stderr.decode(errors='replace')[-300:]}")
+    try:
+        return int(float(stdout.decode().strip()))
+    except ValueError as exc:
+        raise RuntimeError("Mac free-space probe returned invalid output") from exc
+
+
 def _receipt_path(work_root: Path, object_id: str, chunk_index: int) -> Path:
     return work_root / "objects" / object_id / "receipts" / f"chunk-{chunk_index:08d}.json"
 
@@ -149,6 +161,12 @@ def migrate_one(record: dict, args: argparse.Namespace) -> dict:
                 if not block: raise RuntimeError("source stream ended while skipping verified chunk")
                 remaining -= len(block)
             receipts.append(previous); continue
+        free = _mac_free_bytes(args.mac_host, args.mac_known_hosts, args.icloud_destination)
+        if free < args.mac_min_free_bytes + size:
+            raise RuntimeError(
+                f"Mac iCloud volume safety pause: free={free} required={args.mac_min_free_bytes + size}; "
+                "verified chunks retained and no R2 deletion occurred"
+            )
         target = f"{destination_object}/chunks/{index:08d}.bin"
         mac = _receive_chunk(args.mac_host, args.mac_known_hosts, args.icloud_destination, target, producer.stdout, size)
         receipt = {"schema": MIGRATION_SCHEMA, "state": "COMPLETE", "object_id": oid, "chunk_index": index,
@@ -203,9 +221,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--remote-python", required=True); parser.add_argument("--remote-rclone-config", required=True)
     parser.add_argument("--mac-host", required=True); parser.add_argument("--mac-known-hosts", type=Path, required=True)
     parser.add_argument("--icloud-destination", required=True); parser.add_argument("--chunk-mib", type=int, default=512)
+    parser.add_argument("--mac-min-free-gib", type=float, default=3.0,
+                        help="leave this much physical Mac storage free after the next chunk")
     parser.add_argument("--delete-verified", action="store_true")
     parser.add_argument("--limit", type=int); parser.add_argument("--object-id")
     args = parser.parse_args(argv); args.chunk_bytes = args.chunk_mib * 1024 * 1024
+    args.mac_min_free_bytes = int(args.mac_min_free_gib * 1024 * 1024 * 1024)
     args.work_root.mkdir(parents=True, exist_ok=True)
     count = 0
     for record in iter_inventory(args.inventory):
