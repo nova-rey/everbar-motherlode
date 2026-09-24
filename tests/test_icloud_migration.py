@@ -31,6 +31,22 @@ def test_inventory_is_paginated_deterministic_and_hashed(tmp_path: Path, monkeyp
     assert summary["inventory_sha256"] == hashlib.sha256(target.read_bytes()).hexdigest()
 
 
+def test_inventory_resumes_after_last_complete_line_without_duplicate(tmp_path: Path, monkeypatch):
+    target = tmp_path / "inventory.jsonl"; partial = target.with_suffix(".jsonl.partial")
+    first = {"schema": migration.MIGRATION_SCHEMA, "bucket": "b", "key": "a", "object_id": migration.object_id("b", "a"), "size": 2, "etag": "a", "last_modified": None}
+    partial.write_text(json.dumps(first, sort_keys=True) + "\n{incomplete")
+    class Pager:
+        def paginate(self, **kwargs):
+            assert kwargs == {"Bucket": "b", "StartAfter": "a"}
+            return [{"Contents": [{"Key": "b", "Size": 3, "ETag": '"b"'}]}]
+    class Client:
+        def get_paginator(self, name): return Pager()
+    monkeypatch.setattr(migration, "_direct_s3_client", lambda _: Client())
+    summary = migration.inventory_r2(target, ["b"], resume=True)
+    assert summary["object_count"] == 2
+    assert [row["key"] for row in migration.iter_inventory(target)] == ["a", "b"]
+
+
 def test_stream_reports_chunk_and_total_hashes_without_mutating_payload(monkeypatch, capsys):
     payload = b"abcde" * 700_000
     class Body:

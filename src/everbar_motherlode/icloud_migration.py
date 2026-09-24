@@ -32,7 +32,36 @@ def _canonical(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
-def inventory_r2(output: Path, buckets: Iterable[str] | None = None) -> dict:
+def _read_partial_inventory(path: Path) -> tuple[hashlib._Hash, dict[str, dict[str, int]], dict[str, str]]:
+    """Recover a complete-line JSONL prefix after interruption.
+
+    S3's ``StartAfter`` is exclusive, so the final durable key per bucket is a
+    safe resume cursor.  The partial is truncated to the final newline before
+    appending, preventing a killed writer's incomplete line from becoming an
+    inventory record.
+    """
+    digest = hashlib.sha256(); counts: dict[str, dict[str, int]] = {}; last: dict[str, str] = {}
+    if not path.exists():
+        return digest, counts, last
+    data = path.read_bytes()
+    newline = data.rfind(b"\n")
+    if newline < 0:
+        path.write_bytes(b""); return digest, counts, last
+    data = data[:newline + 1]
+    path.write_bytes(data)
+    for number, line in enumerate(data.splitlines(), 1):
+        record = json.loads(line)
+        if record.get("schema") != MIGRATION_SCHEMA:
+            raise ValueError(f"partial inventory line {number} has unexpected schema")
+        bucket = record["bucket"]
+        row = counts.setdefault(bucket, {"objects": 0, "bytes": 0})
+        row["objects"] += 1; row["bytes"] += int(record["size"])
+        last[bucket] = record["key"]
+        digest.update(line + b"\n")
+    return digest, counts, last
+
+
+def inventory_r2(output: Path, buckets: Iterable[str] | None = None, *, resume: bool = False) -> dict:
     """Write a deterministic, paginated object inventory without loading it all.
 
     This runs only on the credential-holding source host.  Inventory records
@@ -43,12 +72,19 @@ def inventory_r2(output: Path, buckets: Iterable[str] | None = None) -> dict:
     selected = sorted(set(buckets or (row["Name"] for row in client.list_buckets().get("Buckets", []))))
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_suffix(output.suffix + ".partial")
-    digest = hashlib.sha256()
-    counts: dict[str, dict[str, int]] = {}
-    with temporary.open("wb") as handle:
+    if output.exists():
+        raise FileExistsError(f"completed inventory already exists: {output}")
+    if temporary.exists() and not resume:
+        raise FileExistsError(f"partial inventory exists; rerun with resume: {temporary}")
+    digest, counts, cursors = _read_partial_inventory(temporary) if resume else (hashlib.sha256(), {}, {})
+    with temporary.open("ab") as handle:
         for bucket in selected:
-            count = total = 0
-            for page in client.get_paginator("list_objects_v2").paginate(Bucket=bucket):
+            count = counts.get(bucket, {}).get("objects", 0)
+            total = counts.get(bucket, {}).get("bytes", 0)
+            kwargs = {"Bucket": bucket}
+            if bucket in cursors:
+                kwargs["StartAfter"] = cursors[bucket]
+            for page in client.get_paginator("list_objects_v2").paginate(**kwargs):
                 for item in page.get("Contents", []):
                     record = {
                         "schema": MIGRATION_SCHEMA,
@@ -62,6 +98,8 @@ def inventory_r2(output: Path, buckets: Iterable[str] | None = None) -> dict:
                     encoded = _canonical(record) + b"\n"
                     handle.write(encoded); digest.update(encoded)
                     count += 1; total += record["size"]
+                    cursors[bucket] = record["key"]
+                handle.flush()
             counts[bucket] = {"objects": count, "bytes": total}
     temporary.replace(output)
     summary = {

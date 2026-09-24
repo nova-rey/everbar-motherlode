@@ -176,8 +176,13 @@ def migrate_one(record: dict, args: argparse.Namespace) -> dict:
         )
         deleted = _ssh(args.source_host, delete_command, capture=True); stdout, stderr = deleted.communicate()
         if deleted.returncode: raise RuntimeError(f"source deletion refused: {stderr.decode(errors='replace')[-500:]}")
-        manifest["source_deletion"] = json.loads(stdout)
-        final_receipt.write_text(_json(manifest))
+        # The object manifest remains immutable after its iCloud proof.  A
+        # separate deletion receipt prevents a post-verification mutation from
+        # changing the manifest hash that authorized deletion.
+        deletion_receipt = object_root / "source-deletion-receipt.json"
+        deletion_receipt.write_text(_json(json.loads(stdout)))
+        _remote_write_and_evict(args.mac_host, args.mac_known_hosts, args.icloud_destination, deletion_receipt,
+                                f"{destination_object}/source-deletion-receipt.json")
     return {"state": "COMPLETE", "object_id": oid, "size": record["size"], "deleted": bool(args.delete_verified)}
 
 

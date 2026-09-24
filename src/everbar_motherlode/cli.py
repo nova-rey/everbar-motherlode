@@ -25,6 +25,7 @@ def main(argv=None):
  p_r2_inventory=sub.add_parser("r2-icloud-inventory")
  p_r2_inventory.add_argument("--output", type=Path, required=True)
  p_r2_inventory.add_argument("--bucket", action="append")
+ p_r2_inventory.add_argument("--resume", action="store_true")
  p_r2_stream=sub.add_parser("r2-icloud-source-stream")
  p_r2_stream.add_argument("--bucket", required=True)
  p_r2_stream.add_argument("--key", required=True)
@@ -60,7 +61,7 @@ def main(argv=None):
   return autopilot_main(["--root", str(a.root), "--config", str(a.config), "--plan", str(a.plan)])
  if a.cmd=="r2-icloud-inventory":
   from .icloud_migration import inventory_r2
-  print(__import__('json').dumps(inventory_r2(a.output, a.bucket), indent=2, sort_keys=True)); return 0
+  print(__import__('json').dumps(inventory_r2(a.output, a.bucket, resume=a.resume), indent=2, sort_keys=True)); return 0
  if a.cmd=="r2-icloud-source-stream":
   from .icloud_migration import stream_r2_object
   stream_r2_object(a.bucket, a.key, a.chunk_bytes); return 0

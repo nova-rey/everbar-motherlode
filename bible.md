@@ -14,6 +14,12 @@ deletion is opt-in and refuses changed source metadata; credentials remain only
 on the R2 source host.  Historical R2 data is never removed until its manifest
 and every chunk receipt are complete.
 
+The inventory cursor now resumes from the last complete JSONL key after an
+interrupted listing, discards only a partial trailing line, and uses S3's
+exclusive `StartAfter` semantics to avoid duplicate object records.  A final
+inventory remains atomic: the complete JSONL and summary appear only after all
+configured buckets finish.
+
 ## 2026-09-12 — R2 streaming canonical consolidation
 
 Added `stream-consolidate`, an explicit alternative to the historical
