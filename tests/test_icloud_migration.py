@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from everbar_motherlode import icloud_migration as migration
+from scripts.migrate_r2_to_icloud import iter_small_object_packs
 
 
 def test_object_id_is_stable_and_key_safe():
@@ -142,6 +143,19 @@ def test_small_object_pack_is_bounded_framed_and_hash_bound(monkeypatch, capsys)
         offset += row["size"]
     with pytest.raises(ValueError, match="exceeds"):
         migration.stream_r2_pack(rows, expected - 1, io.BytesIO())
+
+
+def test_small_object_pack_planner_preserves_inventory_order_and_bounds(tmp_path: Path, monkeypatch):
+    records = []
+    for index, size in enumerate((400_000, 400_000, 3_000_000, 400_000)):
+        key = f"k{index}"
+        records.append({"schema": migration.MIGRATION_SCHEMA, "bucket": "b", "key": key,
+                        "object_id": migration.object_id("b", key), "size": size, "etag": key, "last_modified": None})
+    inventory = tmp_path / "inventory.jsonl"
+    inventory.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in records))
+    packs = list(iter_small_object_packs(inventory, pack_bytes=1024 * 1024, small_object_bytes=1024 * 1024))
+    assert [[row["key"] for row in group] for group in packs] == [["k0", "k1"], ["k3"]]
+    assert all(len(migration.PACK_MAGIC) + sum(migration.pack_frame_size(row) for row in group) <= 1024 * 1024 for group in packs)
 
 
 def test_delete_refuses_source_metadata_change(monkeypatch):

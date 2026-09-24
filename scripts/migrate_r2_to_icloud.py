@@ -19,7 +19,14 @@ import threading
 import time
 from pathlib import Path
 
-from everbar_motherlode.icloud_migration import MIGRATION_SCHEMA, STREAM_EVENT_PREFIX, iter_inventory
+from everbar_motherlode.icloud_migration import (
+    MIGRATION_SCHEMA,
+    PACK_MAGIC,
+    STREAM_EVENT_PREFIX,
+    _canonical,
+    iter_inventory,
+    pack_frame_size,
+)
 
 
 def _json(value: object) -> str:
@@ -126,6 +133,78 @@ def _existing_chunk_receipt(path: Path) -> dict | None:
     except (FileNotFoundError, json.JSONDecodeError):
         return None
     return receipt if receipt.get("state") == "COMPLETE" and len(receipt.get("sha256", "")) == 64 else None
+
+
+def iter_small_object_packs(inventory: Path, *, pack_bytes: int, small_object_bytes: int, max_records: int = 10_000):
+    """Yield deterministic small-object groups whose complete framed form fits.
+
+    Large corpus payloads retain the direct per-object path.  This stream is
+    solely for tiny R2 objects, where a one-file-per-object iCloud layout would
+    turn an otherwise safe evacuation into a filesystem-scale failure.
+    """
+    if pack_bytes < 1024 * 1024 or small_object_bytes < 0 or max_records < 1:
+        raise ValueError("invalid small-object pack bounds")
+    rows: list[dict] = []; used = len(PACK_MAGIC)
+    for record in iter_inventory(inventory):
+        if int(record["size"]) > small_object_bytes:
+            continue
+        frame = pack_frame_size(record)
+        if frame + len(PACK_MAGIC) > pack_bytes:
+            # Headers should not make a small record untransferable.  Keeping
+            # it on the direct path preserves exact verification instead.
+            continue
+        if rows and (used + frame > pack_bytes or len(rows) >= max_records):
+            yield rows; rows = []; used = len(PACK_MAGIC)
+        rows.append(record); used += frame
+    if rows:
+        yield rows
+
+
+def _pack_id(records: list[dict]) -> str:
+    return hashlib.sha256(_canonical({"schema": MIGRATION_SCHEMA, "objects": [row["object_id"] for row in records]})).hexdigest()
+
+
+def migrate_small_pack(records: list[dict], args: argparse.Namespace) -> dict:
+    """Relay one already-bounded source pack and preserve an iCloud manifest."""
+    pack_id = _pack_id(records); pack_root = args.work_root / "packs" / pack_id
+    pack_root.mkdir(parents=True, exist_ok=True); receipt_path = pack_root / "pack-receipt.json"
+    if receipt_path.exists():
+        prior = json.loads(receipt_path.read_text())
+        if prior.get("state") == "COMPLETE":
+            return {"state": "SKIPPED_COMPLETE", "pack_id": pack_id}
+    expected = len(PACK_MAGIC) + sum(pack_frame_size(row) for row in records)
+    free = _mac_free_bytes(args.mac_host, args.mac_known_hosts, args.icloud_destination)
+    if free < args.mac_min_free_bytes + expected:
+        raise RuntimeError(f"Mac iCloud volume safety pause: free={free} required={args.mac_min_free_bytes + expected}; no R2 deletion occurred")
+    source_command = (
+        f"cd {shlex.quote(args.remote_repo)} && RCLONE_CONFIG={shlex.quote(args.remote_rclone_config)} "
+        f"{shlex.quote(args.remote_python)} -m everbar_motherlode.cli r2-icloud-pack-stream --max-bytes {expected}"
+    )
+    producer = _ssh(args.source_host, source_command, known_hosts=args.source_known_hosts, stdin=subprocess.PIPE, capture=True)
+    assert producer.stdin is not None
+    for record in records:
+        producer.stdin.write(_canonical(record) + b"\n")
+    producer.stdin.close()
+    events: list[dict] = []; errors: list[str] = []
+    reader = threading.Thread(target=_read_events, args=(producer.stderr, events, errors), daemon=True); reader.start()
+    destination = f"{args.icloud_destination.rstrip('/')}/packs/{pack_id}/pack.bin"
+    mac = _receive_chunk(args.mac_host, args.mac_known_hosts, args.icloud_destination, destination, producer.stdout, expected)
+    producer.stdout.close(); rc = producer.wait(); reader.join(timeout=10)
+    if rc or errors:
+        raise RuntimeError(f"source pack stream failed rc={rc}: {'; '.join(errors[-3:])}")
+    terminal = next((event for event in events if event.get("event") == "PACK"), None)
+    emitted = [event for event in events if event.get("event") == "PACK_RECORD"]
+    if terminal is None or terminal.get("pack_size") != expected or terminal.get("sha256") != mac["sha256"]:
+        raise RuntimeError("source and Mac pack hashes differ; R2 objects retained")
+    if [event.get("object_id") for event in emitted] != [row["object_id"] for row in records]:
+        raise RuntimeError("source pack records differ from deterministic inventory batch")
+    receipt = {"schema": MIGRATION_SCHEMA, "state": "COMPLETE", "pack_id": pack_id, "pack_size": expected,
+               "sha256": mac["sha256"], "mac_evicted_flags": mac["evicted_flags"], "inventory": records,
+               "source_events": emitted, "completed_at": time.time()}
+    receipt_path.write_text(_json(receipt))
+    _remote_write_and_evict(args.mac_host, args.mac_known_hosts, args.icloud_destination, receipt_path,
+                            f"{args.icloud_destination.rstrip('/')}/packs/{pack_id}/pack-manifest.json")
+    return {"state": "COMPLETE", "pack_id": pack_id, "object_count": len(records), "size": expected, "deleted": False}
 
 
 def migrate_one(record: dict, args: argparse.Namespace) -> dict:
@@ -242,16 +321,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--icloud-destination", required=True); parser.add_argument("--chunk-mib", type=int, default=512)
     parser.add_argument("--mac-min-free-gib", type=float, default=3.0,
                         help="leave this much physical Mac storage free after the next chunk")
+    parser.add_argument("--pack-small-under-mib", type=int,
+                        help="pack only inventory objects at or below this size; direct objects are skipped")
     parser.add_argument("--delete-verified", action="store_true")
     parser.add_argument("--limit", type=int); parser.add_argument("--object-id")
     args = parser.parse_args(argv); args.chunk_bytes = args.chunk_mib * 1024 * 1024
     args.mac_min_free_bytes = int(args.mac_min_free_gib * 1024 * 1024 * 1024)
     args.work_root.mkdir(parents=True, exist_ok=True)
     count = 0
-    for record in iter_inventory(args.inventory):
-        if args.object_id and record["object_id"] != args.object_id: continue
-        print(json.dumps(migrate_one(record, args), sort_keys=True), flush=True); count += 1
-        if args.limit and count >= args.limit: break
+    if args.pack_small_under_mib is not None:
+        if args.object_id:
+            parser.error("--object-id is not valid with --pack-small-under-mib")
+        small = args.pack_small_under_mib * 1024 * 1024
+        for records in iter_small_object_packs(args.inventory, pack_bytes=args.chunk_bytes, small_object_bytes=small):
+            print(json.dumps(migrate_small_pack(records, args), sort_keys=True), flush=True); count += 1
+            if args.limit and count >= args.limit: break
+    else:
+        for record in iter_inventory(args.inventory):
+            if args.object_id and record["object_id"] != args.object_id: continue
+            print(json.dumps(migrate_one(record, args), sort_keys=True), flush=True); count += 1
+            if args.limit and count >= args.limit: break
     return 0
 
 

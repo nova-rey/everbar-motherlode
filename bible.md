@@ -499,3 +499,9 @@ entries.  A pack is capped before streaming, binds every framed object to its
 inventory metadata and SHA-256, and binds the whole pack with a terminal hash.
 It is a transport optimization only: the inventory and an evicted pack manifest
 remain prerequisites for source deletion.
+
+The coordinator now deterministically groups only small inventory objects into
+those bounded packs, preserving inventory order and leaving large payloads on
+the independently range-resumable path.  Each completed pack is verified and
+evicted as one iCloud file plus an evicted manifest; no packed source object is
+deleted by this transport step.
