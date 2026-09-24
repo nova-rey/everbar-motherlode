@@ -111,6 +111,25 @@ def _read_events(stream, events: list[dict], errors: list[str]) -> None:
             errors.append(line[-500:])
 
 
+def _stage_pack_manifest(host: str, known_hosts: Path, local_path: Path, remote_path: str) -> None:
+    """Copy only a bounded pack manifest to the source host.
+
+    The actual corpus bytes still move straight from R2 through the relay to
+    the Mac.  Staging this tiny metadata file avoids a bidirectional SSH pipe
+    deadlock caused by a source that emits pack bytes before consuming every
+    manifest line.
+    """
+    mkdir = _ssh(host, f"mkdir -p {shlex.quote(str(Path(remote_path).parent))}", known_hosts=known_hosts)
+    _, stderr = mkdir.communicate()
+    if mkdir.returncode:
+        raise RuntimeError(f"cannot create source manifest directory: {stderr.decode(errors='replace')[-300:]}")
+    command = ["scp", "-q", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20",
+               "-o", f"UserKnownHostsFile={known_hosts}", str(local_path), f"{host}:{remote_path}"]
+    copied = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    if copied.returncode:
+        raise RuntimeError(f"cannot stage source pack manifest: {copied.stderr.decode(errors='replace')[-300:]}")
+
+
 def _mac_free_bytes(host: str, known_hosts: Path, destination: str) -> int:
     command = f"df -Pk {shlex.quote(destination)} | tail -1 | awk '{{print $4 * 1024}}'"
     probe = _ssh(host, command, known_hosts=known_hosts, capture=True)
@@ -176,15 +195,21 @@ def migrate_small_pack(records: list[dict], args: argparse.Namespace) -> dict:
     free = _mac_free_bytes(args.mac_host, args.mac_known_hosts, args.icloud_destination)
     if free < args.mac_min_free_bytes + expected:
         raise RuntimeError(f"Mac iCloud volume safety pause: free={free} required={args.mac_min_free_bytes + expected}; no R2 deletion occurred")
-    source_command = (
-        f"cd {shlex.quote(args.remote_repo)} && RCLONE_CONFIG={shlex.quote(args.remote_rclone_config)} "
-        f"{shlex.quote(args.remote_python)} -m everbar_motherlode.cli r2-icloud-pack-stream --max-bytes {expected}"
+    records_path = pack_root / "source-records.jsonl"
+    records_path.write_bytes(b"".join(_canonical(record) + b"\n" for record in records))
+    remote_records = f"/tmp/everbar-icloud-packs/{pack_id}.jsonl"
+    _stage_pack_manifest(args.source_host, args.source_known_hosts, records_path, remote_records)
+    runner = (
+        "from everbar_motherlode.icloud_migration import stream_r2_pack; "
+        "import json,sys; "
+        "stream_r2_pack((json.loads(line) for line in open(sys.argv[1]) if line.strip()), int(sys.argv[2]))"
     )
-    producer = _ssh(args.source_host, source_command, known_hosts=args.source_known_hosts, stdin=subprocess.PIPE, capture=True)
-    assert producer.stdin is not None
-    for record in records:
-        producer.stdin.write(_canonical(record) + b"\n")
-    producer.stdin.close()
+    source_command = (
+        f"cd {shlex.quote(args.remote_repo)} && export RCLONE_CONFIG={shlex.quote(args.remote_rclone_config)}; "
+        f"trap 'rm -f {shlex.quote(remote_records)}' EXIT; "
+        f"{shlex.quote(args.remote_python)} -c {shlex.quote(runner)} {shlex.quote(remote_records)} {expected}"
+    )
+    producer = _ssh(args.source_host, source_command, known_hosts=args.source_known_hosts, stdin=None, capture=True)
     events: list[dict] = []; errors: list[str] = []
     reader = threading.Thread(target=_read_events, args=(producer.stderr, events, errors), daemon=True); reader.start()
     destination = f"{args.icloud_destination.rstrip('/')}/packs/{pack_id}/pack.bin"

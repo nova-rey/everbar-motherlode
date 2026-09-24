@@ -505,3 +505,30 @@ those bounded packs, preserving inventory order and leaving large payloads on
 the independently range-resumable path.  Each completed pack is verified and
 evicted as one iCloud file plus an evicted manifest; no packed source object is
 deleted by this transport step.
+
+## 2026-09-24 — Small-pack relay EOF flush
+
+The bounded iCloud pack relay explicitly flushes the inventory-record stream
+to its remote producer before closing stdin.  This prevents an SSH pipe from
+leaving a correctly configured source process waiting for input, while keeping
+the existing hash receipt and no-delete guarantees unchanged.
+
+## 2026-09-24 — Small-pack relay concurrent pipe drain
+
+The pack record feeder and pack-byte relay now run concurrently.  A remote
+pack producer can emit frames before it has consumed every manifest line, so
+serially sending all records first could fill SSH pipes and stall a valid
+migration.  The concurrent handoff closes stdin deterministically, preserves
+all receipt verification, and remains delete-disabled by default.
+
+## 2026-09-24 — Small-pack source manifest staging
+
+The relay now stages only each bounded JSONL pack manifest to the source host,
+then streams the corresponding R2 bytes over a one-way source channel.  This
+removes the bidirectional SSH back-pressure class entirely; corpus payloads
+remain unstaged on the relay and all source deletion protections remain
+unchanged.
+
+The source command explicitly exports the established Rclone configuration
+before invoking the temporary-manifest pack runner.  This keeps credentials in
+the runner environment rather than narrowly attaching them to the shell trap.
