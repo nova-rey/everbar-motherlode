@@ -35,15 +35,26 @@ def _ssh(host: str, command: str, *, known_hosts: Path | None = None, stdin=None
                             text=False)
 
 
+def _mac_write_command(remote_path: str) -> str:
+    """Return the Mac-side atomic write/hash/upload/evict protocol.
+
+    `brctl evict` is the only supported proof that CloudDocs has accepted the
+    complete file, but large files may need a short upload window before the
+    first eviction succeeds.  Retrying *only the eviction* avoids retransmitting
+    a verified local chunk and keeps the Mac below its small physical disk.
+    """
+    parent = shlex.quote(str(Path(remote_path).parent)); target = shlex.quote(remote_path)
+    return (
+        f"set -euo pipefail; mkdir -p {parent}; tmp={target}.partial; cat > \"$tmp\"; mv \"$tmp\" {target}; "
+        f"digest=$(shasum -a 256 {target} | awk '{{print $1}}'); evicted=0; "
+        f"for delay in 2 4 8 16 30 30 30 30 30 30; do if brctl evict {target}; then evicted=1; break; fi; sleep \"$delay\"; done; "
+        f"test \"$evicted\" = 1; flags=$(ls -lO {target}); printf '%s\\t%s\\n' \"$digest\" \"$flags\""
+    )
+
+
 def _remote_write_and_evict(host: str, known_hosts: Path, destination: str, local_path: Path, remote_path: str) -> dict:
     """Copy a small receipt/manifest atomically, hash it remotely, then evict it."""
-    parent = shlex.quote(str(Path(remote_path).parent))
-    target = shlex.quote(remote_path)
-    command = (
-        f"set -euo pipefail; mkdir -p {parent}; tmp={target}.partial; cat > \"$tmp\"; mv \"$tmp\" {target}; "
-        f"digest=$(shasum -a 256 {target} | awk '{{print $1}}'); brctl evict {target}; "
-        f"flags=$(ls -lO {target}); printf '%s\\t%s\\n' \"$digest\" \"$flags\""
-    )
+    command = _mac_write_command(remote_path)
     with local_path.open("rb") as source:
         proc = _ssh(host, command, known_hosts=known_hosts, stdin=source)
         stdout, stderr = proc.communicate()
@@ -57,12 +68,7 @@ def _remote_write_and_evict(host: str, known_hosts: Path, destination: str, loca
 
 
 def _receive_chunk(host: str, known_hosts: Path, destination: str, remote_path: str, producer_stdout, size: int) -> dict:
-    parent = shlex.quote(str(Path(remote_path).parent)); target = shlex.quote(remote_path)
-    command = (
-        f"set -euo pipefail; mkdir -p {parent}; tmp={target}.partial; cat > \"$tmp\"; mv \"$tmp\" {target}; "
-        f"digest=$(shasum -a 256 {target} | awk '{{print $1}}'); brctl evict {target}; "
-        f"flags=$(ls -lO {target}); printf '%s\\t%s\\n' \"$digest\" \"$flags\""
-    )
+    command = _mac_write_command(remote_path)
     sink = _ssh(host, command, known_hosts=known_hosts, stdin=subprocess.PIPE)
     remaining = size
     while remaining:

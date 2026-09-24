@@ -20,6 +20,12 @@ exclusive `StartAfter` semantics to avoid duplicate object records.  A final
 inventory remains atomic: the complete JSONL and summary appear only after all
 configured buckets finish.
 
+Large iCloud chunks retry only the CloudDocs eviction step with bounded backoff
+after their atomic write and local SHA-256 calculation.  This accommodates the
+documented short delay between a large-file write and `brctl evict` acceptance
+without retransmitting source bytes or treating a merely local Mac file as a
+durable iCloud copy.
+
 ## 2026-09-12 — R2 streaming canonical consolidation
 
 Added `stream-consolidate`, an explicit alternative to the historical
