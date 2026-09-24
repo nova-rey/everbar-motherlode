@@ -115,6 +115,35 @@ def test_stream_can_resume_at_a_chunk_boundary(monkeypatch, capsys):
     assert terminal["start_offset"] == size and terminal["object_size"] == len(payload)
 
 
+def test_small_object_pack_is_bounded_framed_and_hash_bound(monkeypatch, capsys):
+    payloads = {"one": b"a" * 600_000, "two": b"b" * 600_000}
+    rows = [{"schema": migration.MIGRATION_SCHEMA, "bucket": "b", "key": key,
+             "object_id": migration.object_id("b", key), "size": len(value), "etag": key,
+             "last_modified": None} for key, value in payloads.items()]
+    class Body:
+        def __init__(self, data): self.data = data; self.pos = 0
+        def read(self, count):
+            result = self.data[self.pos:self.pos + count]; self.pos += len(result); return result
+    class Client:
+        def head_object(self, Bucket, Key): return {"ContentLength": len(payloads[Key]), "ETag": f'"{Key}"'}
+        def get_object(self, Bucket, Key): return {"Body": Body(payloads[Key])}
+    monkeypatch.setattr(migration, "_direct_s3_client", lambda _: Client())
+    expected = len(migration.PACK_MAGIC) + sum(migration.pack_frame_size(row) for row in rows)
+    sink = io.BytesIO(); terminal = migration.stream_r2_pack(rows, expected, sink)
+    assert terminal["pack_size"] == expected and len(sink.getvalue()) == expected
+    assert terminal["sha256"] == hashlib.sha256(sink.getvalue()).hexdigest()
+    raw = sink.getvalue(); assert raw.startswith(migration.PACK_MAGIC)
+    offset = len(migration.PACK_MAGIC)
+    for row in rows:
+        length = int.from_bytes(raw[offset:offset + 4], "big"); offset += 4
+        header = json.loads(raw[offset:offset + length]); offset += length
+        assert header["object_id"] == row["object_id"]
+        assert raw[offset:offset + row["size"]] == payloads[row["key"]]
+        offset += row["size"]
+    with pytest.raises(ValueError, match="exceeds"):
+        migration.stream_r2_pack(rows, expected - 1, io.BytesIO())
+
+
 def test_delete_refuses_source_metadata_change(monkeypatch):
     class Client:
         def head_object(self, **kwargs): return {"ContentLength": 2, "ETag": '"changed"'}

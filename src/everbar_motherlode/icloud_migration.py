@@ -20,6 +20,7 @@ from .distributed import _direct_s3_client
 
 STREAM_EVENT_PREFIX = "ICLOUD_R2_STREAM "
 MIGRATION_SCHEMA = "everbar-motherlode.r2-icloud-migration/v1"
+PACK_MAGIC = b"EMLIPK01"
 
 
 def object_id(bucket: str, key: str) -> str:
@@ -205,6 +206,70 @@ def hash_r2_object(bucket: str, key: str, *, range_bytes: int = 64 * 1024 * 1024
             raise RuntimeError(f"R2 hash range {start}-{end} failed after {retries} attempts") from last_error
     return {"event": "OBJECT_HASH", "bucket": bucket, "key": key, "object_id": object_id(bucket, key),
             "size": total, "sha256": digest.hexdigest(), "etag": str(head.get("ETag", "")).strip('"')}
+
+
+def _pack_header(record: dict, sha256: str) -> bytes:
+    """Encode a self-describing object frame header with a fixed-size hash."""
+    if len(sha256) != 64:
+        raise ValueError("pack record SHA-256 must be exactly 64 hexadecimal characters")
+    return _canonical({"schema": MIGRATION_SCHEMA, "bucket": record["bucket"], "key": record["key"],
+                       "object_id": record["object_id"], "size": int(record["size"]),
+                       "etag": record["etag"], "sha256": sha256})
+
+
+def pack_frame_size(record: dict) -> int:
+    """Return the exact byte cost of a framed small-object pack member."""
+    if record.get("object_id") != object_id(record.get("bucket", ""), record.get("key", "")):
+        raise ValueError("pack record has invalid object identity")
+    size = int(record.get("size", -1))
+    if size < 0:
+        raise ValueError("pack record has invalid size")
+    return 4 + len(_pack_header(record, "0" * 64)) + size
+
+
+def stream_r2_pack(records: Iterable[dict], max_bytes: int, output: BinaryIO | None = None) -> dict:
+    """Stream a bounded self-describing pack of small immutable R2 objects.
+
+    A pack avoids making millions of iCloud filesystem entries for tiny
+    receipt/worker objects.  It contains canonical length-prefixed headers and
+    object bytes; each header is bound to its source SHA-256 and the terminal
+    event binds the complete pack.  The caller is still required to retain the
+    inventory and a separate evicted pack manifest before deletion is allowed.
+    """
+    rows = list(records)
+    if not rows or max_bytes < 1024 * 1024:
+        raise ValueError("a pack needs records and at least 1 MiB capacity")
+    expected = len(PACK_MAGIC) + sum(pack_frame_size(row) for row in rows)
+    if expected > max_bytes:
+        raise ValueError(f"pack exceeds bounded capacity: {expected} > {max_bytes}")
+    client = _direct_s3_client("direct-s3://evacuate/pack")
+    sink = output or sys.stdout.buffer
+    digest = hashlib.sha256(); digest.update(PACK_MAGIC); sink.write(PACK_MAGIC)
+    offset = len(PACK_MAGIC); emitted = []
+    for index, row in enumerate(rows):
+        head = client.head_object(Bucket=row["bucket"], Key=row["key"])
+        if int(head["ContentLength"]) != int(row["size"]) or str(head.get("ETag", "")).strip('"') != row["etag"]:
+            raise RuntimeError("source object metadata changed since inventory; pack refused")
+        last_error: Exception | None = None
+        for _ in range(3):
+            try:
+                data = _read_exact(client.get_object(Bucket=row["bucket"], Key=row["key"])["Body"], int(row["size"]))
+                break
+            except Exception as exc:
+                last_error = exc
+        else:
+            raise RuntimeError(f"source pack record {index} could not be read") from last_error
+        record_hash = hashlib.sha256(data).hexdigest(); header = _pack_header(row, record_hash)
+        frame = len(header).to_bytes(4, "big") + header + data
+        sink.write(frame); digest.update(frame)
+        event = {"event": "PACK_RECORD", "index": index, "offset": offset, "frame_size": len(frame),
+                 "object_id": row["object_id"], "size": int(row["size"]), "sha256": record_hash}
+        emitted.append(event); offset += len(frame)
+        print(STREAM_EVENT_PREFIX + json.dumps(event, sort_keys=True), file=sys.stderr, flush=True)
+    terminal = {"event": "PACK", "record_count": len(rows), "pack_size": offset,
+                "sha256": digest.hexdigest(), "records": emitted}
+    print(STREAM_EVENT_PREFIX + json.dumps(terminal, sort_keys=True), file=sys.stderr, flush=True)
+    return terminal
 
 
 def stream_r2_object(bucket: str, key: str, chunk_bytes: int, output: BinaryIO | None = None, *, start_offset: int = 0) -> dict:

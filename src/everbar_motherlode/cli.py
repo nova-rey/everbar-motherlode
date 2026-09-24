@@ -33,6 +33,9 @@ def main(argv=None):
  p_r2_stream.add_argument("--start-offset", type=int, default=0)
  p_r2_hash=sub.add_parser("r2-icloud-object-hash")
  p_r2_hash.add_argument("--bucket", required=True); p_r2_hash.add_argument("--key", required=True)
+ p_r2_pack=sub.add_parser("r2-icloud-pack-stream")
+ p_r2_pack.add_argument("--max-bytes", type=int, required=True,
+                        help="strict maximum for framed records read as JSONL on stdin")
  p_r2_delete=sub.add_parser("r2-icloud-delete-verified")
  p_r2_delete.add_argument("--bucket", required=True)
  p_r2_delete.add_argument("--key", required=True)
@@ -71,6 +74,10 @@ def main(argv=None):
  if a.cmd=="r2-icloud-object-hash":
   from .icloud_migration import hash_r2_object
   print(__import__('json').dumps(hash_r2_object(a.bucket, a.key), sort_keys=True)); return 0
+ if a.cmd=="r2-icloud-pack-stream":
+  from .icloud_migration import stream_r2_pack
+  import json, sys
+  stream_r2_pack((json.loads(line) for line in sys.stdin if line.strip()), a.max_bytes); return 0
  if a.cmd=="r2-icloud-delete-verified":
   from .icloud_migration import delete_verified_r2_object
   print(__import__('json').dumps(delete_verified_r2_object(a.bucket, a.key, a.expected_size, a.expected_etag), sort_keys=True)); return 0

@@ -490,3 +490,12 @@ The gzip inventory recovery test now also proves that a malformed final member
 does not discard the valid page-members before it.  This is important because
 an interrupted listing is a resumable checkpoint, never a reason to restart a
 multi-million-object inventory from zero.
+
+## 2026-09-24 — Bounded small-object iCloud packs
+
+The evacuation transport has a versioned framed-pack primitive for the many
+small R2 objects that would otherwise create millions of iCloud filesystem
+entries.  A pack is capped before streaming, binds every framed object to its
+inventory metadata and SHA-256, and binds the whole pack with a terminal hash.
+It is a transport optimization only: the inventory and an evicted pack manifest
+remain prerequisites for source deletion.
