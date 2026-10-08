@@ -22,6 +22,7 @@ def main() -> int:
     parser.add_argument("--pack-mib", type=int, default=256)
     parser.add_argument("--small-under-mib", type=int, default=1)
     parser.add_argument("--chunk-mib", type=int, default=256)
+    parser.add_argument("--pack-fetch-workers", type=int, default=4)
     parser.add_argument("--verify-coverage", action="store_true")
     parser.add_argument("--verify-payload-hashes", action="store_true")
     args = parser.parse_args()
@@ -37,6 +38,7 @@ def main() -> int:
         pack_bytes=args.pack_mib * 1024 * 1024,
         small_object_bytes=args.small_under_mib * 1024 * 1024,
         chunk_bytes=args.chunk_mib * 1024 * 1024,
+        pack_fetch_workers=args.pack_fetch_workers,
     )
     print(json.dumps(result, sort_keys=True))
     return 0

@@ -38,6 +38,10 @@ limiting factor.  NAS packs now use a bounded concurrent fetch window while
 writing frames in deterministic inventory order; each object still receives an
 unchanged metadata check and SHA-256 before its frame is committed.
 
+The fetch-window width is an explicit runtime parameter so local operators can
+increase R2 request concurrency only after observing available RAM and actual
+NAS ingress, instead of changing the archive format or receipt semantics.
+
 ## 2026-09-24 — R2 to iCloud receipt-backed evacuation boundary
 
 Added a source-host-only R2 inventory and byte-stream protocol plus a

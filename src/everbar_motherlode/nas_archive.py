@@ -82,7 +82,7 @@ def iter_small_packs(records: Iterable[dict], *, pack_bytes: int, small_object_b
         yield group
 
 
-def _copy_pack(records: list[dict], archive_root: Path, pack_bytes: int) -> dict:
+def _copy_pack(records: list[dict], archive_root: Path, pack_bytes: int, fetch_workers: int) -> dict:
     pack_id = _pack_id(records)
     root = archive_root / "r2" / "packs" / pack_id
     payload = root / "pack.bin"
@@ -99,7 +99,7 @@ def _copy_pack(records: list[dict], archive_root: Path, pack_bytes: int) -> dict
         # only a few hundred bytes.  Per-record event logs are retained in the
         # receipt, not duplicated into multi-gigabyte worker logs.
         with contextlib.redirect_stderr(quiet):
-            terminal = stream_r2_pack_parallel(records, pack_bytes, handle, fetch_workers=4)
+            terminal = stream_r2_pack_parallel(records, pack_bytes, handle, fetch_workers=fetch_workers)
         handle.flush()
         os.fsync(handle.fileno())
     digest = _sha256_file(temporary)
@@ -203,7 +203,7 @@ def stream_r2_pack_parallel(records: list[dict], max_bytes: int, output, *, fetc
     return terminal
 
 
-def migrate_worker(*, inventory: Path, archive_root: Path, worker_index: int, worker_count: int, pack_bytes: int = 256 * 1024 * 1024, small_object_bytes: int = 1024 * 1024, chunk_bytes: int = 256 * 1024 * 1024) -> dict:
+def migrate_worker(*, inventory: Path, archive_root: Path, worker_index: int, worker_count: int, pack_bytes: int = 256 * 1024 * 1024, small_object_bytes: int = 1024 * 1024, chunk_bytes: int = 256 * 1024 * 1024, pack_fetch_workers: int = 4) -> dict:
     """Copy one deterministic partition of inventory to NAS; never delete R2."""
     # Progress is scoped by immutable inventory filename: input and output
     # lanes may run concurrently with the same worker indexes.
@@ -216,7 +216,7 @@ def migrate_worker(*, inventory: Path, archive_root: Path, worker_index: int, wo
         pack_bytes=pack_bytes,
         small_object_bytes=small_object_bytes,
     ):
-        result = _copy_pack(group, archive_root, pack_bytes)
+        result = _copy_pack(group, archive_root, pack_bytes, pack_fetch_workers)
         totals["objects"] += result["objects"]; totals["bytes"] += result["bytes"]; totals["units"] += 1
         totals["skipped_units"] += result["state"] == "SKIPPED_COMPLETE"
         _write_json_atomic(progress_path, {"schema": NAS_ARCHIVE_SCHEMA, "state": "RUNNING", "worker_index": worker_index, "worker_count": worker_count, "inventory": str(inventory), "totals": totals, "updated_at": time.time()})

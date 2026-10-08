@@ -45,6 +45,7 @@ def main() -> int:
     parser.add_argument("--rclone-config", type=Path, required=True)
     parser.add_argument("--repo", type=Path, required=True)
     parser.add_argument("--poll-seconds", type=int, default=60)
+    parser.add_argument("--pack-fetch-workers", type=int, default=4)
     args = parser.parse_args()
     if args.workers < 1 or args.poll_seconds < 5:
         parser.error("workers must be positive and poll-seconds at least 5")
@@ -69,6 +70,7 @@ def main() -> int:
                 f"cd {args.repo} && exec env RCLONE_CONFIG={args.rclone_config} "
                 f".venv/bin/python scripts/migrate_r2_to_nas.py --inventory {args.inventory} "
                 f"--archive-root {args.archive_root} --worker-index {index} --worker-count {args.workers} "
+                f"--pack-fetch-workers {args.pack_fetch_workers} "
                 f">> {log} 2>&1"
             )
             try:
