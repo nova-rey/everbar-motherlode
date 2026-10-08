@@ -1,7 +1,9 @@
+import io
 import json
 from pathlib import Path
 
 from everbar_motherlode.icloud_migration import object_id
+from everbar_motherlode import nas_archive
 from everbar_motherlode.nas_archive import NAS_ARCHIVE_SCHEMA, _write_json_atomic, iter_small_packs, selected_records, verify_coverage
 
 
@@ -53,3 +55,22 @@ def test_coverage_requires_exact_inventory_receipt(tmp_path: Path):
     (pack / "receipt.json").unlink()
     missing = verify_coverage(inventory=inventory, archive_root=archive)
     assert missing["state"] == "INCOMPLETE" and missing["missing_objects"] == 1
+
+
+def test_parallel_pack_preserves_record_order_and_hashes(monkeypatch):
+    payloads = {"key-0": b"a" * 5, "key-1": b"b" * 7, "key-2": b"c" * 11}
+    rows = [_record(index, len(payloads[f"key-{index}"])) for index in range(3)]
+    class Body:
+        def __init__(self, data): self.data = data; self.position = 0
+        def read(self, amount):
+            result = self.data[self.position:self.position + amount]; self.position += len(result); return result
+    class Client:
+        def head_object(self, Bucket, Key): return {"ContentLength": len(payloads[Key]), "ETag": f'"{Key[-1]}"'}
+        def get_object(self, Bucket, Key): return {"Body": Body(payloads[Key])}
+    monkeypatch.setattr(nas_archive, "_direct_s3_client", lambda _: Client())
+    # Match the fake ETags to the inventory metadata.
+    for row in rows: row["etag"] = row["key"][-1]
+    sink = io.BytesIO()
+    result = nas_archive.stream_r2_pack_parallel(rows, 1024 * 1024, sink, fetch_workers=2)
+    assert result["pack_size"] == len(sink.getvalue())
+    assert [event["object_id"] for event in result["records"]] == [row["object_id"] for row in rows]

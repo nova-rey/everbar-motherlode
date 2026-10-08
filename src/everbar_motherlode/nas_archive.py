@@ -13,10 +13,12 @@ import json
 import os
 import sqlite3
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Iterable
 
-from .icloud_migration import PACK_MAGIC, _canonical, iter_inventory, pack_frame_size, stream_r2_object, stream_r2_pack
+from .distributed import _direct_s3_client
+from .icloud_migration import PACK_MAGIC, _canonical, _pack_header, _read_exact, iter_inventory, pack_frame_size, stream_r2_object
 
 
 NAS_ARCHIVE_SCHEMA = "everbar-motherlode.r2-nas-archive/v1"
@@ -97,7 +99,7 @@ def _copy_pack(records: list[dict], archive_root: Path, pack_bytes: int) -> dict
         # only a few hundred bytes.  Per-record event logs are retained in the
         # receipt, not duplicated into multi-gigabyte worker logs.
         with contextlib.redirect_stderr(quiet):
-            terminal = stream_r2_pack(records, pack_bytes, output=handle)
+            terminal = stream_r2_pack_parallel(records, pack_bytes, handle, fetch_workers=4)
         handle.flush()
         os.fsync(handle.fileno())
     digest = _sha256_file(temporary)
@@ -151,6 +153,54 @@ def _copy_object(record: dict, archive_root: Path, chunk_bytes: int) -> dict:
     }
     _write_json_atomic(receipt_path, receipt)
     return {"state": "COMPLETE", "kind": "object", "object_id": record["object_id"], "objects": 1, "bytes": int(record["size"])}
+
+
+def _fetch_pack_record(client: object, index: int, row: dict) -> tuple[bytes, dict]:
+    """Fetch one bounded object, preserving the source metadata guard."""
+    head = client.head_object(Bucket=row["bucket"], Key=row["key"])
+    if int(head["ContentLength"]) != int(row["size"]) or str(head.get("ETag", "")).strip('"') != row["etag"]:
+        raise RuntimeError("source object metadata changed since inventory; pack refused")
+    last_error: Exception | None = None
+    for _ in range(3):
+        try:
+            data = _read_exact(client.get_object(Bucket=row["bucket"], Key=row["key"])["Body"], int(row["size"]))
+            break
+        except Exception as exc:
+            last_error = exc
+    else:
+        raise RuntimeError(f"source pack record {index} could not be read") from last_error
+    digest = hashlib.sha256(data).hexdigest()
+    header = _pack_header(row, digest)
+    frame = len(header).to_bytes(4, "big") + header + data
+    event = {"event": "PACK_RECORD", "index": index, "frame_size": len(frame), "object_id": row["object_id"], "size": int(row["size"]), "sha256": digest}
+    return frame, event
+
+
+def stream_r2_pack_parallel(records: list[dict], max_bytes: int, output, *, fetch_workers: int = 4) -> dict:
+    """Write a deterministic pack while fetching a small bounded window concurrently."""
+    if not records or max_bytes < 1024 * 1024 or fetch_workers < 1:
+        raise ValueError("invalid parallel pack bounds")
+    expected = len(PACK_MAGIC) + sum(pack_frame_size(row) for row in records)
+    if expected > max_bytes:
+        raise ValueError(f"pack exceeds bounded capacity: {expected} > {max_bytes}")
+    client = _direct_s3_client("direct-s3://evacuate/nas-pack")
+    digest = hashlib.sha256(); digest.update(PACK_MAGIC); output.write(PACK_MAGIC)
+    emitted: list[dict] = []; offset = len(PACK_MAGIC)
+    with ThreadPoolExecutor(max_workers=fetch_workers, thread_name_prefix="r2-pack") as executor:
+        pending: dict[int, Future] = {}
+        next_submit = 0
+        while next_submit < min(fetch_workers, len(records)):
+            pending[next_submit] = executor.submit(_fetch_pack_record, client, next_submit, records[next_submit])
+            next_submit += 1
+        for index in range(len(records)):
+            frame, event = pending.pop(index).result()
+            event["offset"] = offset
+            output.write(frame); digest.update(frame); emitted.append(event); offset += len(frame)
+            if next_submit < len(records):
+                pending[next_submit] = executor.submit(_fetch_pack_record, client, next_submit, records[next_submit])
+                next_submit += 1
+    terminal = {"event": "PACK", "record_count": len(records), "pack_size": offset, "sha256": digest.hexdigest(), "records": emitted}
+    return terminal
 
 
 def migrate_worker(*, inventory: Path, archive_root: Path, worker_index: int, worker_count: int, pack_bytes: int = 256 * 1024 * 1024, small_object_bytes: int = 1024 * 1024, chunk_bytes: int = 256 * 1024 * 1024) -> dict:

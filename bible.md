@@ -33,6 +33,11 @@ A local NAS archive watcher restarts only incomplete, receiptless worker
 partitions from their atomic partial payloads.  It never deletes R2 or iCloud
 content, and records fleet state continuously on the NAS.
 
+The initial archive benchmark exposed serial small-object GET latency as the
+limiting factor.  NAS packs now use a bounded concurrent fetch window while
+writing frames in deterministic inventory order; each object still receives an
+unchanged metadata check and SHA-256 before its frame is committed.
+
 ## 2026-09-24 — R2 to iCloud receipt-backed evacuation boundary
 
 Added a source-host-only R2 inventory and byte-stream protocol plus a
