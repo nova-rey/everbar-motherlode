@@ -47,6 +47,12 @@ a COMPLETE NAS coverage receipt bound to the exact inventory, deletes in
 receipt-backed idempotent batches, and independently confirms each source
 bucket is empty before producing a terminal deletion receipt.
 
+The NAS finalizer is a detached local process: it waits for every worker
+receipt, builds a fresh R2 inventory, requires an exact inventory match,
+rehashes NAS payloads during coverage verification, and only then executes the
+explicitly confirmed R2 deletion stage.  iCloud remains a separate cleanup
+lane rather than being silently conflated with R2 deletion.
+
 ## 2026-09-24 — R2 to iCloud receipt-backed evacuation boundary
 
 Added a source-host-only R2 inventory and byte-stream protocol plus a
