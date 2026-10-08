@@ -29,6 +29,10 @@ R2 inventory against receipt-backed pack/object payloads.  It fails closed on
 missing or metadata-mismatched objects and can optionally rehash every NAS
 payload before any separately authorized source-deletion phase.
 
+A local NAS archive watcher restarts only incomplete, receiptless worker
+partitions from their atomic partial payloads.  It never deletes R2 or iCloud
+content, and records fleet state continuously on the NAS.
+
 ## 2026-09-24 — R2 to iCloud receipt-backed evacuation boundary
 
 Added a source-host-only R2 inventory and byte-stream protocol plus a
