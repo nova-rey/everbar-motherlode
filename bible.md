@@ -2,6 +2,14 @@
 
 Append-only engineering record.
 
+## 2026-10-08 — CloudDocs cleanup waits for NAS/R2 closure
+
+CloudDocs cleanup waits for the independent R2-empty terminal receipt and
+requires the live Mac metadata inventory to exactly match the NAS-preserved
+iCloud inventory before deleting only the dedicated migration directory.  The
+dataless CloudDocs placeholders are not treated as the authoritative payload;
+their R2 source bytes are first preserved and rehashed on the NAS.
+
 ## 2026-10-08 — R2 and iCloud archive migration now targets the NAS
 
 The user replaced the constrained iCloud relay destination with a dedicated
