@@ -8,6 +8,7 @@ payload has a source-metadata check, a SHA-256 receipt, and an atomic rename.
 from __future__ import annotations
 
 import hashlib
+import contextlib
 import json
 import os
 import time
@@ -89,11 +90,13 @@ def _copy_pack(records: list[dict], archive_root: Path, pack_bytes: int) -> dict
         return {"state": "SKIPPED_COMPLETE", "kind": "pack", "pack_id": pack_id, "objects": len(records), "bytes": expected}
     root.mkdir(parents=True, exist_ok=True)
     temporary = payload.with_name(payload.name + ".partial")
-    with temporary.open("wb") as handle:
+    with temporary.open("wb") as handle, open(os.devnull, "w") as quiet:
         # ``stream_r2_pack`` takes the pack *capacity* (and deliberately
         # rejects capacities below 1 MiB); a final small pack may itself be
-        # only a few hundred bytes.
-        terminal = stream_r2_pack(records, pack_bytes, output=handle)
+        # only a few hundred bytes.  Per-record event logs are retained in the
+        # receipt, not duplicated into multi-gigabyte worker logs.
+        with contextlib.redirect_stderr(quiet):
+            terminal = stream_r2_pack(records, pack_bytes, output=handle)
         handle.flush()
         os.fsync(handle.fileno())
     digest = _sha256_file(temporary)
@@ -125,8 +128,9 @@ def _copy_object(record: dict, archive_root: Path, chunk_bytes: int) -> dict:
         return {"state": "SKIPPED_COMPLETE", "kind": "object", "object_id": record["object_id"], "objects": 1, "bytes": int(record["size"])}
     root.mkdir(parents=True, exist_ok=True)
     temporary = payload.with_name(payload.name + ".partial")
-    with temporary.open("wb") as handle:
-        terminal = stream_r2_object(record["bucket"], record["key"], chunk_bytes, output=handle)
+    with temporary.open("wb") as handle, open(os.devnull, "w") as quiet:
+        with contextlib.redirect_stderr(quiet):
+            terminal = stream_r2_object(record["bucket"], record["key"], chunk_bytes, output=handle)
         handle.flush()
         os.fsync(handle.fileno())
     digest = _sha256_file(temporary)

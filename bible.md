@@ -20,6 +20,10 @@ Worker progress receipts are inventory-scoped, allowing independent input and
 output inventory lanes to run concurrently without one worker index replacing
 another lane's resume receipt.
 
+The NAS writer discards only redundant per-object stderr event chatter after
+embedding the authoritative events in each completed receipt.  This prevents a
+16-million-object archive from consuming NAS capacity with duplicate logs.
+
 ## 2026-09-24 — R2 to iCloud receipt-backed evacuation boundary
 
 Added a source-host-only R2 inventory and byte-stream protocol plus a
