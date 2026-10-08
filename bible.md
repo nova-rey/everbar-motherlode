@@ -42,6 +42,11 @@ The fetch-window width is an explicit runtime parameter so local operators can
 increase R2 request concurrency only after observing available RAM and actual
 NAS ingress, instead of changing the archive format or receipt semantics.
 
+R2 deletion remains a distinct, literal-confirmation action.  It accepts only
+a COMPLETE NAS coverage receipt bound to the exact inventory, deletes in
+receipt-backed idempotent batches, and independently confirms each source
+bucket is empty before producing a terminal deletion receipt.
+
 ## 2026-09-24 — R2 to iCloud receipt-backed evacuation boundary
 
 Added a source-host-only R2 inventory and byte-stream protocol plus a

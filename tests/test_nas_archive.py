@@ -4,7 +4,7 @@ from pathlib import Path
 
 from everbar_motherlode.icloud_migration import object_id
 from everbar_motherlode import nas_archive
-from everbar_motherlode.nas_archive import NAS_ARCHIVE_SCHEMA, _write_json_atomic, iter_small_packs, selected_records, verify_coverage
+from everbar_motherlode.nas_archive import NAS_ARCHIVE_SCHEMA, _write_json_atomic, delete_verified_inventory, iter_small_packs, selected_records, verify_coverage
 
 
 def _record(index: int, size: int) -> dict:
@@ -74,3 +74,29 @@ def test_parallel_pack_preserves_record_order_and_hashes(monkeypatch):
     result = nas_archive.stream_r2_pack_parallel(rows, 1024 * 1024, sink, fetch_workers=2)
     assert result["pack_size"] == len(sink.getvalue())
     assert [event["object_id"] for event in result["records"]] == [row["object_id"] for row in rows]
+
+
+def test_verified_delete_refuses_unbound_coverage_and_receipts_batches(tmp_path: Path, monkeypatch):
+    row = _record(0, 3)
+    inventory = tmp_path / "inventory.jsonl"
+    inventory.write_text(json.dumps(row, sort_keys=True) + "\n")
+    archive = tmp_path / "archive"
+    pack = archive / "r2" / "packs" / "p"
+    pack.mkdir(parents=True)
+    (pack / "pack.bin").write_bytes(b"abc")
+    import hashlib
+    _write_json_atomic(pack / "receipt.json", {
+        "schema": NAS_ARCHIVE_SCHEMA, "state": "COMPLETE", "kind": "pack",
+        "bytes": 3, "sha256": hashlib.sha256(b"abc").hexdigest(), "records": [row],
+    })
+    coverage = verify_coverage(inventory=inventory, archive_root=archive, verify_payload_hashes=True)
+    coverage_path = archive / "receipts" / f"coverage-{inventory.name}.json"
+    calls = []
+    class Client:
+        def delete_objects(self, **kwargs): calls.append(kwargs); return {"Deleted": kwargs["Delete"]["Objects"]}
+        def list_objects_v2(self, **kwargs): return {"KeyCount": 0}
+    monkeypatch.setattr(nas_archive, "_direct_s3_client", lambda _: Client())
+    result = delete_verified_inventory(inventory=inventory, archive_root=archive, coverage_receipt=coverage_path)
+    assert result["state"] == "COMPLETE" and len(calls) == 1
+    assert (archive / "receipts" / "r2-deletion" / "b" / "batch-00000000.json").exists()
+    assert coverage["state"] == "COMPLETE"

@@ -316,3 +316,80 @@ def verify_coverage(*, inventory: Path, archive_root: Path, verify_payload_hashe
         return result
     finally:
         connection.close()
+
+
+def inventory_content_sha256(inventory: Path) -> str:
+    digest = hashlib.sha256()
+    for row in iter_inventory(inventory):
+        digest.update(_canonical(row) + b"\n")
+    return digest.hexdigest()
+
+
+def delete_verified_inventory(*, inventory: Path, archive_root: Path, coverage_receipt: Path) -> dict:
+    """Delete R2 only after a complete, exact NAS coverage receipt.
+
+    Batch receipts make deletion idempotent across interruptions.  Callers must
+    invoke this separately from copy/verification; the archive writer itself
+    has no destructive option.
+    """
+    coverage = json.loads(coverage_receipt.read_text())
+    digest = inventory_content_sha256(inventory)
+    if coverage.get("schema") != NAS_ARCHIVE_SCHEMA or coverage.get("state") != "COMPLETE":
+        raise RuntimeError("coverage receipt is not complete")
+    if coverage.get("inventory_content_sha256") != digest:
+        raise RuntimeError("coverage receipt does not bind this inventory")
+    client = _direct_s3_client("direct-s3://evacuate/nas-delete")
+    root = archive_root / "receipts" / "r2-deletion"
+    batches: dict[str, list[dict]] = {}
+    counts: dict[str, int] = {}
+    for row in iter_inventory(inventory):
+        bucket = row["bucket"]
+        group = batches.setdefault(bucket, [])
+        group.append(row)
+        if len(group) == 1000:
+            _delete_batch(client, root, bucket, counts.get(bucket, 0), group)
+            counts[bucket] = counts.get(bucket, 0) + 1
+            group.clear()
+    for bucket, group in batches.items():
+        if group:
+            _delete_batch(client, root, bucket, counts.get(bucket, 0), group)
+            counts[bucket] = counts.get(bucket, 0) + 1
+    remaining: dict[str, int] = {}
+    for bucket in sorted({row["bucket"] for row in iter_inventory(inventory)}):
+        response = client.list_objects_v2(Bucket=bucket, MaxKeys=1)
+        remaining[bucket] = int(response.get("KeyCount", 0))
+    result = {
+        "schema": NAS_ARCHIVE_SCHEMA,
+        "state": "COMPLETE" if not any(remaining.values()) else "INCOMPLETE",
+        "inventory": str(inventory),
+        "inventory_content_sha256": digest,
+        "coverage_receipt": str(coverage_receipt),
+        "batches": counts,
+        "remaining_first_page_counts": remaining,
+        "completed_at": time.time(),
+    }
+    _write_json_atomic(root / "terminal.json", result)
+    if result["state"] != "COMPLETE":
+        raise RuntimeError("R2 bucket was not empty after verified deletion")
+    return result
+
+
+def _delete_batch(client: object, root: Path, bucket: str, index: int, rows: list[dict]) -> None:
+    receipt_path = root / bucket / f"batch-{index:08d}.json"
+    prior = _read_complete_receipt(receipt_path)
+    object_ids = [row["object_id"] for row in rows]
+    if prior and prior.get("object_ids") == object_ids:
+        return
+    response = client.delete_objects(Bucket=bucket, Delete={"Objects": [{"Key": row["key"]} for row in rows], "Quiet": True})
+    errors = response.get("Errors", [])
+    if errors:
+        raise RuntimeError(f"R2 batch deletion returned errors: {errors[:3]}")
+    _write_json_atomic(receipt_path, {
+        "schema": NAS_ARCHIVE_SCHEMA,
+        "state": "COMPLETE",
+        "bucket": bucket,
+        "batch_index": index,
+        "object_ids": object_ids,
+        "count": len(rows),
+        "deleted_at": time.time(),
+    })
