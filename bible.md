@@ -2,6 +2,20 @@
 
 Append-only engineering record.
 
+## 2026-10-08 — R2 and iCloud archive migration now targets the NAS
+
+The user replaced the constrained iCloud relay destination with a dedicated
+NAS archive namespace mounted at
+`/mnt/nas/shared/everbar-motherlode-r2-archive`.  The R2 evacuation path is
+copy-only until a fresh source inventory, per-pack/per-object SHA-256
+receipts, and a complete NAS coverage reconciliation prove every source object
+has durable NAS representation.  Tiny R2 objects are written as deterministic
+self-describing packs so the NAS does not have to absorb millions of tiny
+filesystem entries; larger objects are preserved independently.  Historical
+iCloud staging is retained as a separate source lane and is not deleted while
+the Mac is unreachable.  No R2 or iCloud source deletion is authorized by the
+copy worker itself.
+
 ## 2026-09-24 — R2 to iCloud receipt-backed evacuation boundary
 
 Added a source-host-only R2 inventory and byte-stream protocol plus a
