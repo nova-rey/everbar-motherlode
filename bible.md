@@ -24,6 +24,11 @@ The NAS writer discards only redundant per-object stderr event chatter after
 embedding the authoritative events in each completed receipt.  This prevents a
 16-million-object archive from consuming NAS capacity with duplicate logs.
 
+The final NAS coverage gate is a streaming SQLite reconciliation of the frozen
+R2 inventory against receipt-backed pack/object payloads.  It fails closed on
+missing or metadata-mismatched objects and can optionally rehash every NAS
+payload before any separately authorized source-deletion phase.
+
 ## 2026-09-24 — R2 to iCloud receipt-backed evacuation boundary
 
 Added a source-host-only R2 inventory and byte-stream protocol plus a

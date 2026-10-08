@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from everbar_motherlode.icloud_migration import object_id
-from everbar_motherlode.nas_archive import NAS_ARCHIVE_SCHEMA, iter_small_packs, selected_records
+from everbar_motherlode.nas_archive import NAS_ARCHIVE_SCHEMA, _write_json_atomic, iter_small_packs, selected_records, verify_coverage
 
 
 def _record(index: int, size: int) -> dict:
@@ -33,3 +33,23 @@ def test_small_pack_planning_keeps_bounds_and_skips_large():
     packed = [row["key"] for pack in packs for row in pack]
     assert packed == ["key-0", "key-1", "key-3"]
     assert NAS_ARCHIVE_SCHEMA.endswith("/v1")
+
+
+def test_coverage_requires_exact_inventory_receipt(tmp_path: Path):
+    row = _record(0, 3)
+    inventory = tmp_path / "inventory.jsonl"
+    inventory.write_text(json.dumps(row, sort_keys=True) + "\n")
+    archive = tmp_path / "archive"
+    pack = archive / "r2" / "packs" / "p"
+    pack.mkdir(parents=True)
+    (pack / "pack.bin").write_bytes(b"abc")
+    import hashlib
+    _write_json_atomic(pack / "receipt.json", {
+        "schema": NAS_ARCHIVE_SCHEMA, "state": "COMPLETE", "kind": "pack",
+        "bytes": 3, "sha256": hashlib.sha256(b"abc").hexdigest(), "records": [row],
+    })
+    verified = verify_coverage(inventory=inventory, archive_root=archive, verify_payload_hashes=True)
+    assert verified["state"] == "COMPLETE"
+    (pack / "receipt.json").unlink()
+    missing = verify_coverage(inventory=inventory, archive_root=archive)
+    assert missing["state"] == "INCOMPLETE" and missing["missing_objects"] == 1

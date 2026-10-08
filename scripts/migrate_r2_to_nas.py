@@ -10,19 +10,25 @@ import argparse
 import json
 from pathlib import Path
 
-from everbar_motherlode.nas_archive import migrate_worker
+from everbar_motherlode.nas_archive import migrate_worker, verify_coverage
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--inventory", type=Path, required=True)
     parser.add_argument("--archive-root", type=Path, required=True)
-    parser.add_argument("--worker-index", type=int, required=True)
-    parser.add_argument("--worker-count", type=int, required=True)
+    parser.add_argument("--worker-index", type=int, default=0)
+    parser.add_argument("--worker-count", type=int, default=1)
     parser.add_argument("--pack-mib", type=int, default=256)
     parser.add_argument("--small-under-mib", type=int, default=1)
     parser.add_argument("--chunk-mib", type=int, default=256)
+    parser.add_argument("--verify-coverage", action="store_true")
+    parser.add_argument("--verify-payload-hashes", action="store_true")
     args = parser.parse_args()
+    if args.verify_coverage:
+        result = verify_coverage(inventory=args.inventory, archive_root=args.archive_root, verify_payload_hashes=args.verify_payload_hashes)
+        print(json.dumps(result, sort_keys=True))
+        return 0 if result["state"] == "COMPLETE" else 1
     result = migrate_worker(
         inventory=args.inventory,
         archive_root=args.archive_root,

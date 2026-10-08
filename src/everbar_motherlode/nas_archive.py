@@ -11,6 +11,7 @@ import hashlib
 import contextlib
 import json
 import os
+import sqlite3
 import time
 from pathlib import Path
 from typing import Iterable
@@ -181,3 +182,87 @@ def migrate_worker(*, inventory: Path, archive_root: Path, worker_index: int, wo
     result = {"schema": NAS_ARCHIVE_SCHEMA, "state": "COMPLETE", "worker_index": worker_index, "worker_count": worker_count, "inventory": str(inventory), "totals": totals, "started_at": started, "completed_at": time.time()}
     _write_json_atomic(progress_path, result)
     return result
+
+
+def verify_coverage(*, inventory: Path, archive_root: Path, verify_payload_hashes: bool = False) -> dict:
+    """Prove an inventory has NAS receipt coverage without deleting R2.
+
+    SQLite keeps the reconciliation bounded: the inventory can contain tens of
+    millions of objects, while the process retains only one receipt at a time.
+    """
+    database = archive_root / "staging" / f"coverage-{inventory.name}.sqlite"
+    database.parent.mkdir(parents=True, exist_ok=True)
+    if database.exists():
+        database.unlink()
+    connection = sqlite3.connect(database)
+    try:
+        connection.executescript("""
+            PRAGMA journal_mode=WAL;
+            PRAGMA synchronous=FULL;
+            CREATE TABLE expected (object_id TEXT PRIMARY KEY, bucket TEXT NOT NULL, key TEXT NOT NULL, size INTEGER NOT NULL, etag TEXT NOT NULL);
+            CREATE TABLE covered (object_id TEXT PRIMARY KEY, bucket TEXT NOT NULL, key TEXT NOT NULL, size INTEGER NOT NULL, etag TEXT NOT NULL, payload TEXT NOT NULL, payload_sha256 TEXT NOT NULL);
+        """)
+        digest = hashlib.sha256(); expected_count = expected_bytes = 0
+        batch: list[tuple[str, str, str, int, str]] = []
+        for row in iter_inventory(inventory):
+            encoded = _canonical(row) + b"\n"
+            digest.update(encoded); expected_count += 1; expected_bytes += int(row["size"])
+            batch.append((row["object_id"], row["bucket"], row["key"], int(row["size"]), row["etag"]))
+            if len(batch) >= 10_000:
+                connection.executemany("INSERT INTO expected VALUES (?, ?, ?, ?, ?)", batch); connection.commit(); batch.clear()
+        if batch:
+            connection.executemany("INSERT INTO expected VALUES (?, ?, ?, ?, ?)", batch); connection.commit()
+
+        receipt_paths = sorted((archive_root / "r2" / "packs").glob("*/receipt.json")) + sorted((archive_root / "r2" / "objects").glob("*/receipt.json"))
+        covered_rows = 0; bad_payloads: list[str] = []
+        for receipt_path in receipt_paths:
+            receipt = _read_complete_receipt(receipt_path)
+            if receipt is None:
+                continue
+            payload = receipt_path.parent / ("pack.bin" if receipt.get("kind") == "pack" else "object.bin")
+            declared_bytes = int(receipt.get("bytes", -1))
+            declared_hash = receipt.get("sha256", "")
+            valid_payload = payload.exists() and payload.stat().st_size == declared_bytes
+            if valid_payload and verify_payload_hashes:
+                valid_payload = _sha256_file(payload) == declared_hash
+            if not valid_payload:
+                bad_payloads.append(str(receipt_path.relative_to(archive_root)))
+                continue
+            records = receipt.get("records") if receipt.get("kind") == "pack" else [receipt.get("object")]
+            values = [(row["object_id"], row["bucket"], row["key"], int(row["size"]), row["etag"], str(payload.relative_to(archive_root)), declared_hash) for row in records if row]
+            connection.executemany("INSERT OR IGNORE INTO covered VALUES (?, ?, ?, ?, ?, ?, ?)", values)
+            covered_rows += len(values)
+            if covered_rows % 100_000 < len(values):
+                connection.commit()
+        connection.commit()
+        matched = connection.execute("""
+            SELECT COUNT(*) FROM expected e JOIN covered c USING (object_id)
+             WHERE e.bucket=c.bucket AND e.key=c.key AND e.size=c.size AND e.etag=c.etag
+        """).fetchone()[0]
+        missing = connection.execute("SELECT COUNT(*) FROM expected e LEFT JOIN covered c USING (object_id) WHERE c.object_id IS NULL").fetchone()[0]
+        mismatched = connection.execute("""
+            SELECT COUNT(*) FROM expected e JOIN covered c USING (object_id)
+             WHERE NOT (e.bucket=c.bucket AND e.key=c.key AND e.size=c.size AND e.etag=c.etag)
+        """).fetchone()[0]
+        extra = connection.execute("SELECT COUNT(*) FROM covered c LEFT JOIN expected e USING (object_id) WHERE e.object_id IS NULL").fetchone()[0]
+        result = {
+            "schema": NAS_ARCHIVE_SCHEMA,
+            "state": "COMPLETE" if not (missing or mismatched or bad_payloads) else "INCOMPLETE",
+            "inventory": str(inventory),
+            "inventory_content_sha256": digest.hexdigest(),
+            "expected_objects": expected_count,
+            "expected_bytes": expected_bytes,
+            "matched_objects": matched,
+            "missing_objects": missing,
+            "mismatched_objects": mismatched,
+            "extra_objects": extra,
+            "bad_payload_receipts": bad_payloads[:100],
+            "bad_payload_count": len(bad_payloads),
+            "verify_payload_hashes": verify_payload_hashes,
+            "database": str(database),
+            "completed_at": time.time(),
+        }
+        _write_json_atomic(archive_root / "receipts" / f"coverage-{inventory.name}.json", result)
+        return result
+    finally:
+        connection.close()
