@@ -16,6 +16,10 @@ iCloud staging is retained as a separate source lane and is not deleted while
 the Mac is unreachable.  No R2 or iCloud source deletion is authorized by the
 copy worker itself.
 
+Worker progress receipts are inventory-scoped, allowing independent input and
+output inventory lanes to run concurrently without one worker index replacing
+another lane's resume receipt.
+
 ## 2026-09-24 — R2 to iCloud receipt-backed evacuation boundary
 
 Added a source-host-only R2 inventory and byte-stream protocol plus a

@@ -150,7 +150,9 @@ def _copy_object(record: dict, archive_root: Path, chunk_bytes: int) -> dict:
 
 def migrate_worker(*, inventory: Path, archive_root: Path, worker_index: int, worker_count: int, pack_bytes: int = 256 * 1024 * 1024, small_object_bytes: int = 1024 * 1024, chunk_bytes: int = 256 * 1024 * 1024) -> dict:
     """Copy one deterministic partition of inventory to NAS; never delete R2."""
-    worker_root = archive_root / "r2" / "workers"
+    # Progress is scoped by immutable inventory filename: input and output
+    # lanes may run concurrently with the same worker indexes.
+    worker_root = archive_root / "r2" / "workers" / inventory.name
     progress_path = worker_root / f"worker-{worker_index:02d}-of-{worker_count:02d}.json"
     started = time.time()
     totals = {"objects": 0, "bytes": 0, "units": 0, "skipped_units": 0}
