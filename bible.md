@@ -2,6 +2,19 @@
 
 Append-only engineering record.
 
+## 2026-10-14 — NAS finalization canonicalizes resumable R2 inventories
+
+R2 inventory streams are transport receipts, not a canonical data identity:
+an interrupted/resumed listing can repeat an otherwise identical completed
+page, and provider listing order is not a valid source-deletion proof.  NAS
+finalization therefore canonicalizes a freshly listed live R2 inventory by
+`(bucket, key)`, collapses only byte-identical duplicate metadata rows, and
+fails closed on conflicting duplicates.  The deterministic canonical manifest
+is the sole binding input to NAS coverage verification and receipt-backed R2
+deletion.  This prevents harmless manifest ordering/duplication from causing
+a 700-GiB recopy while retaining the exact-metadata and payload-hash safety
+boundary.
+
 ## 2026-10-08 — CloudDocs cleanup waits for NAS/R2 closure
 
 CloudDocs cleanup waits for the independent R2-empty terminal receipt and

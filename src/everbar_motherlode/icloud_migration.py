@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import gzip
 import json
+import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -171,6 +172,78 @@ def iter_inventory(path: Path) -> Iterable[dict]:
             if int(record.get("size", -1)) < 0:
                 raise ValueError(f"inventory line {number} has invalid size")
             yield record
+
+
+def canonicalize_inventory(source: Path, output: Path, database: Path) -> dict:
+    """Deduplicate an inventory into a stable bucket/key ordered manifest.
+
+    Interrupted/resumed inventory writers can legitimately repeat a completed
+    S3 listing page.  Exact duplicate records are harmless, but a duplicate
+    identity with different metadata is an ambiguity and therefore fails
+    closed.  The resulting manifest is suitable for coverage and deletion
+    binding because it has one deterministic row per live object.
+    """
+    if output.exists() or output.with_name(output.name + ".partial").exists():
+        raise FileExistsError(f"canonical output already exists: {output}")
+    database.parent.mkdir(parents=True, exist_ok=True)
+    if database.exists():
+        database.unlink()
+    connection = sqlite3.connect(database)
+    duplicate_rows = conflicting_rows = source_rows = 0
+    try:
+        connection.executescript("""
+            PRAGMA journal_mode=OFF;
+            PRAGMA synchronous=OFF;
+            CREATE TABLE records (
+                bucket TEXT NOT NULL,
+                key TEXT NOT NULL,
+                raw BLOB NOT NULL,
+                PRIMARY KEY(bucket, key)
+            ) WITHOUT ROWID;
+        """)
+        for record in iter_inventory(source):
+            source_rows += 1
+            raw = _canonical(record)
+            try:
+                connection.execute("INSERT INTO records VALUES (?, ?, ?)", (record["bucket"], record["key"], raw))
+            except sqlite3.IntegrityError:
+                existing = connection.execute("SELECT raw FROM records WHERE bucket=? AND key=?", (record["bucket"], record["key"])).fetchone()[0]
+                if bytes(existing) == raw:
+                    duplicate_rows += 1
+                else:
+                    conflicting_rows += 1
+            if source_rows % 100_000 == 0:
+                connection.commit()
+        connection.commit()
+        if conflicting_rows:
+            raise ValueError(f"inventory has {conflicting_rows} conflicting duplicate bucket/key records")
+        temporary = output.with_name(output.name + ".partial")
+        digest = hashlib.sha256(); object_count = total_bytes = 0
+        with gzip.open(temporary, "wb") if _is_gzip_inventory(output) else temporary.open("wb") as handle:
+            for (raw,) in connection.execute("SELECT raw FROM records ORDER BY bucket, key"):
+                record = json.loads(raw)
+                encoded = _canonical(record) + b"\n"
+                handle.write(encoded); digest.update(encoded)
+                object_count += 1; total_bytes += int(record["size"])
+        temporary.replace(output)
+        summary = {
+            "schema": MIGRATION_SCHEMA,
+            "state": "COMPLETE",
+            "source_inventory": str(source),
+            "canonical_inventory": str(output),
+            "database": str(database),
+            "source_rows": source_rows,
+            "duplicate_rows_collapsed": duplicate_rows,
+            "conflicting_duplicate_rows": conflicting_rows,
+            "object_count": object_count,
+            "total_bytes": total_bytes,
+            "inventory_sha256": digest.hexdigest(),
+            "created_at": time.time(),
+        }
+        output.with_suffix(output.suffix + ".summary.json").write_bytes(_canonical(summary) + b"\n")
+        return summary
+    finally:
+        connection.close()
 
 
 def _read_exact(body: object, expected: int) -> bytes:

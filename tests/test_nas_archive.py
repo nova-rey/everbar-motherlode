@@ -2,7 +2,7 @@ import io
 import json
 from pathlib import Path
 
-from everbar_motherlode.icloud_migration import object_id
+from everbar_motherlode.icloud_migration import canonicalize_inventory, iter_inventory, object_id
 from everbar_motherlode import nas_archive
 from everbar_motherlode.nas_archive import NAS_ARCHIVE_SCHEMA, _write_json_atomic, delete_verified_inventory, iter_small_packs, selected_records, verify_coverage
 
@@ -27,6 +27,24 @@ def test_selected_records_is_disjoint_and_complete(tmp_path: Path):
     partitions = [list(selected_records(inventory, index, 4)) for index in range(4)]
     ids = [row["object_id"] for partition in partitions for row in partition]
     assert len(ids) == len(set(ids)) == len(rows)
+
+
+def test_canonical_inventory_collapses_exact_duplicates_and_rejects_conflicts(tmp_path: Path):
+    row = _record(0, 3)
+    source = tmp_path / "source.jsonl"
+    source.write_text("".join(json.dumps(value) + "\n" for value in [row, row, _record(1, 4)]))
+    canonical = tmp_path / "canonical.jsonl"
+    result = canonicalize_inventory(source, canonical, tmp_path / "canonical.sqlite")
+    assert result["source_rows"] == 3
+    assert result["duplicate_rows_collapsed"] == 1
+    assert [value["key"] for value in iter_inventory(canonical)] == ["key-0", "key-1"]
+
+    conflicting = dict(row); conflicting["etag"] = "different"
+    bad = tmp_path / "bad.jsonl"
+    bad.write_text(json.dumps(row) + "\n" + json.dumps(conflicting) + "\n")
+    import pytest
+    with pytest.raises(ValueError, match="conflicting duplicate"):
+        canonicalize_inventory(bad, tmp_path / "bad-canonical.jsonl", tmp_path / "bad.sqlite")
 
 
 def test_small_pack_planning_keeps_bounds_and_skips_large():
