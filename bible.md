@@ -2,6 +2,16 @@
 
 Append-only engineering record.
 
+## 2026-10-15 — Finalization SQLite staging is local, not NFS
+
+The NAS is the durable payload and receipt authority, but SQLite's large
+random-write reconciliation workload can block on NFS commit semantics.  The
+finalizer now accepts a completed fresh raw inventory and creates its temporary
+canonicalization database under a local staging directory.  Canonical manifest
+and coverage outputs remain on the NAS.  This preserves the same R2 deletion
+gate while preventing a transient database from turning NAS metadata I/O into
+the critical path.
+
 ## 2026-10-14 — NAS finalization canonicalizes resumable R2 inventories
 
 R2 inventory streams are transport receipts, not a canonical data identity:

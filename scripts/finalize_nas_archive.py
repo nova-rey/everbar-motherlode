@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import tempfile
 import time
 from pathlib import Path
 
@@ -43,6 +44,8 @@ def main() -> int:
     parser.add_argument("--migration-inventory", type=Path, required=True)
     parser.add_argument("--workers", type=int, required=True)
     parser.add_argument("--poll-seconds", type=int, default=120)
+    parser.add_argument("--staging-dir", type=Path, default=Path(tempfile.gettempdir()) / "everbar-motherlode-finalizer")
+    parser.add_argument("--raw-final-inventory", type=Path, help="completed fresh R2 inventory to canonicalize instead of listing R2 again")
     parser.add_argument("--confirm-r2-deletion", action="store_true")
     args = parser.parse_args()
     receipt_dir = args.archive_root / "receipts"
@@ -51,14 +54,21 @@ def main() -> int:
     while not complete_workers(args.archive_root, args.migration_inventory, args.workers):
         write_status(status, state="WAITING_FOR_COPY", migration_inventory=str(args.migration_inventory), workers=args.workers)
         time.sleep(args.poll_seconds)
-    write_status(status, state="BUILDING_FINAL_INVENTORY", migration_inventory=str(args.migration_inventory))
-    raw_final = args.archive_root / "inventory" / f"r2-final-raw-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}.jsonl.gz"
-    inventory_r2(raw_final, ["everbar-motherlode-input", "everbar-motherlode-output"])
+    if args.raw_final_inventory:
+        raw_final = args.raw_final_inventory
+        if not raw_final.is_file():
+            raise FileNotFoundError(f"raw final inventory does not exist: {raw_final}")
+        write_status(status, state="CANONICALIZING_EXISTING_FINAL_INVENTORY", raw_final_inventory=str(raw_final))
+    else:
+        write_status(status, state="BUILDING_FINAL_INVENTORY", migration_inventory=str(args.migration_inventory))
+        raw_final = args.archive_root / "inventory" / f"r2-final-raw-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}.jsonl.gz"
+        inventory_r2(raw_final, ["everbar-motherlode-input", "everbar-motherlode-output"])
     canonical_final = args.archive_root / "inventory" / f"r2-final-canonical-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}.jsonl.gz"
+    args.staging_dir.mkdir(parents=True, exist_ok=True)
     canonical_summary = canonicalize_inventory(
         raw_final,
         canonical_final,
-        args.archive_root / "staging" / f"canonical-{canonical_final.name}.sqlite",
+        args.staging_dir / f"canonical-{canonical_final.name}.sqlite",
     )
     write_status(status, state="VERIFYING_NAS_PAYLOAD_HASHES", raw_final_inventory=str(raw_final), final_inventory=str(canonical_final), canonical_summary=canonical_summary)
     coverage = verify_coverage(inventory=canonical_final, archive_root=args.archive_root, verify_payload_hashes=True)
